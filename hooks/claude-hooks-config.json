@@ -1,0 +1,53 @@
+{
+  "_comment": "Add these hooks to ~/.claude/settings.json. For local use, set MONITOR_PORT. For cloud/remote sessions, set MONITOR_URL instead.",
+
+  "hooks_local": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PreToolUse MONITOR_PORT=3123 /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PostToolUse MONITOR_PORT=3123 /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
+          }
+        ]
+      }
+    ]
+  },
+
+  "hooks_cloud": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PreToolUse MONITOR_URL=https://YOUR-TUNNEL.trycloudflare.com /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PostToolUse MONITOR_URL=https://YOUR-TUNNEL.trycloudflare.com /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

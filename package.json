@@ -1,0 +1,108 @@
+{
+  "name": "llm-usage-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "author": "LLM Usage Tracker",
+  "description": "Monitor your AI usage and Claude Code agent activity",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "electron:dev": "tsc -p electron/tsconfig.json && concurrently --kill-others \"next dev -p 3123\" \"wait-on http://127.0.0.1:3123 && NODE_ENV=development ELECTRON_DEV_PORT=3123 electron .\"",
+    "electron:compile": "tsc -p electron/tsconfig.json",
+    "electron:preview": "npm run build && npm run electron:compile && electron .",
+    "electron:build": "npm run electron:clean && npm run build && npm run electron:compile && npm run electron:rebuild-for-build && electron-builder",
+    "electron:clean": "rm -rf dist-electron .next/standalone/dist-electron",
+    "electron:rebuild-for-build": "npx electron-rebuild -f -w better-sqlite3 && cp node_modules/better-sqlite3/build/Release/better_sqlite3.node .next/standalone/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+    "postbuild": "cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "swr": "^2.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "concurrently": "^9.1.2",
+    "electron": "^35.1.2",
+    "electron-builder": "^26.0.12",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.llmusage.tracker",
+    "productName": "LLM Usage Tracker",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "asar": false,
+    "files": [
+      "electron/**/*.js",
+      ".next/standalone/**/*",
+      ".next/static/**/*",
+      "public/**/*",
+      "node_modules/better-sqlite3/**/*",
+      "!.next/standalone/dist-electron",
+      "!.next/standalone/dist-electron/**/*",
+      "!dist-electron",
+      "!dist-electron/**/*"
+    ],
+    "icon": "build/icon.png",
+    "mac": {
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64"]
+        }
+      ],
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": false,
+      "identity": null
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility"
+    },
+    "npmRebuild": false,
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "icon": "build/icon.icns",
+      "iconSize": 80,
+      "background": null
+    }
+  }
+}

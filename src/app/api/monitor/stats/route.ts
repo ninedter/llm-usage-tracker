@@ -1,0 +1,17 @@
+import { NextResponse } from "next/server";
+import { getMonitorStats } from "@/lib/db";
+import type { ApiResponse, MonitorStats } from "@/types";
+
+export const dynamic = "force-dynamic";
+
+export async function GET(): Promise<NextResponse<ApiResponse<MonitorStats>>> {
+  try {
+    const stats = getMonitorStats();
+    return NextResponse.json({ success: true, data: stats });
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, error: { code: "STATS_ERROR", message: error instanceof Error ? error.message : "Failed to get stats" } },
+      { status: 500 }
+    );
+  }
+}
