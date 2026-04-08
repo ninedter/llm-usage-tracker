@@ -9,9 +9,12 @@ import {
   createAgent,
   getMainAgent,
   getWorkingSubagents,
+  rollupDailyUsage,
 } from "@/lib/db";
 import { broadcastEvent } from "@/lib/ws";
 import type { ApiResponse, AgentEvent } from "@/types";
+
+let lastRollup = 0;
 
 // POST /api/monitor/events — Record a new event and handle lifecycle transitions
 export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse<AgentEvent>>> {
@@ -66,10 +69,11 @@ export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse<A
 
     // --- Route events to the correct agent ---
     // When there are working subagents and the event came from the session's main agent,
-    // attribute tool_call/tool_result/stop events to the most recent working subagent.
+    // attribute tool_call/tool_result events to the most recent working subagent.
+    // Note: stop events are NOT routed — Stop means the main agent paused, not a subagent.
     let effectiveAgentId = agent_id;
     if (
-      (event_type === "tool_call" || event_type === "tool_result" || event_type === "stop") &&
+      (event_type === "tool_call" || event_type === "tool_result") &&
       tool_name !== "Agent" // Agent tool calls belong to the parent
     ) {
       const mainAgent = getMainAgent(sid);
@@ -146,6 +150,13 @@ export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse<A
     });
 
     broadcastEvent({ type: "event_created", data: event });
+
+    // Trigger daily rollup at most once per 60 seconds
+    const now = Date.now();
+    if (now - lastRollup > 60_000) {
+      lastRollup = now;
+      try { rollupDailyUsage(); } catch { /* ignore rollup errors */ }
+    }
 
     return NextResponse.json({ success: true, data: event }, { status: 201 });
   } catch (error) {
