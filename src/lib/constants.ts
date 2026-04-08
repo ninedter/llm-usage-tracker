@@ -27,6 +27,8 @@ export const REFRESH_INTERVALS = {
   billing: 300_000,
 } as const;
 
+export const ARCHIVE_AFTER_MS = 30 * 60 * 1000; // 30 minutes
+
 export function getUsageLevel(percentage: number) {
   if (percentage < USAGE_THRESHOLDS.safe) return "safe" as const;
   if (percentage < USAGE_THRESHOLDS.moderate) return "moderate" as const;

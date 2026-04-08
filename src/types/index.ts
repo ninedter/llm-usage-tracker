@@ -70,7 +70,7 @@ export interface ProviderHealth {
 
 // --- Agent Monitor ---
 
-export type AgentStatus = "idle" | "working" | "completed" | "failed" | "cancelled";
+export type AgentStatus = "idle" | "working" | "completed" | "failed" | "cancelled" | "archived";
 export type AgentEventType =
   | "tool_call"
   | "tool_result"
@@ -163,4 +163,94 @@ export interface MonitorStats {
   total_events: number;
   events_today: number;
   total_cost: number;
+}
+
+// --- Analytics ---
+
+export interface AnalyticsOverview {
+  total_cost: number;
+  cost_change_pct: number;
+  session_count: number;
+  avg_session_duration_ms: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  top_model: string;
+  top_model_cost_pct: number;
+  tool_call_count: number;
+  tool_success_rate: number;
+}
+
+export interface TrendPoint {
+  date: string;
+  cost: number;
+  tokens: number;
+  sessions: number;
+}
+
+export interface SessionAnalyticRow {
+  session_id: string;
+  project: string;
+  entrypoint: string;
+  status: string;
+  duration_ms: number;
+  total_tokens: number;
+  cost: number;
+  tool_count: number;
+  started_at: number;
+}
+
+export interface ToolAnalyticEntry {
+  tool_name: string;
+  call_count: number;
+  success_count: number;
+  failure_count: number;
+  success_rate: number;
+  avg_duration_ms: number;
+}
+
+export interface ToolTimelinePoint {
+  tool_name: string;
+  timestamp: number;
+  success: boolean;
+  duration_ms: number;
+}
+
+export interface ToolAnalytics {
+  tools: ToolAnalyticEntry[];
+  timeline: ToolTimelinePoint[];
+}
+
+export interface FileEntry {
+  file_path: string;
+  directory: string;
+  file_name: string;
+  modification_count: number;
+  tools_used: string[];
+  tool_breakdown: Record<string, number>;
+}
+
+export interface FileAnalytics {
+  files: FileEntry[];
+  directories: { directory: string; total_modifications: number }[];
+}
+
+export interface ModelEntry {
+  model: string;
+  cost: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}
+
+export interface ModelTrendPoint {
+  date: string;
+  model: string;
+  cost: number;
+  tokens: number;
+}
+
+export interface ModelAnalytics {
+  models: ModelEntry[];
+  trend: ModelTrendPoint[];
 }
