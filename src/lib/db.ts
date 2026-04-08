@@ -80,6 +80,26 @@ export function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
     CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
     CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+    CREATE INDEX IF NOT EXISTS idx_agents_session_type_status ON agents(session_id, type, status);
+    CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS daily_usage (
+      date              TEXT NOT NULL,
+      model             TEXT NOT NULL,
+      project           TEXT NOT NULL DEFAULT '',
+      input_tokens      INTEGER NOT NULL DEFAULT 0,
+      output_tokens     INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      cost              REAL NOT NULL DEFAULT 0,
+      session_count     INTEGER NOT NULL DEFAULT 0,
+      tool_calls        INTEGER NOT NULL DEFAULT 0,
+      tool_failures     INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (date, model, project)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_daily_usage_date ON daily_usage(date);
+    CREATE INDEX IF NOT EXISTS idx_daily_usage_project ON daily_usage(project);
   `);
 
   // Forward-compatible migrations: add columns if they don't exist
@@ -438,4 +458,368 @@ export function abandonStaleSessions(): number {
     d.prepare("UPDATE agents SET status = 'completed', ended_at = ? WHERE status IN ('working', 'idle') AND session_id IN (SELECT id FROM sessions WHERE status = 'abandoned')").run(Date.now());
   }
   return result.changes;
+}
+
+export function archiveStaleAgents(): number {
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  const d = getDb();
+  const result = d.prepare(
+    "UPDATE agents SET status = 'archived' WHERE status IN ('completed', 'failed', 'cancelled') AND ended_at IS NOT NULL AND ended_at < ?"
+  ).run(cutoff);
+  return result.changes;
+}
+
+export function rollupDailyUsage(dateStr?: string): void {
+  const d = getDb();
+  const date = dateStr || new Date().toISOString().slice(0, 10);
+  const dayStart = new Date(date + "T00:00:00").getTime();
+  const dayEnd = dayStart + 86400000;
+
+  const tokenRows = d.prepare(`
+    SELECT
+      t.model,
+      COALESCE(s.project, '') as project,
+      SUM(t.input_tokens) as input_tokens,
+      SUM(t.output_tokens) as output_tokens,
+      SUM(t.cache_read_tokens) as cache_read_tokens,
+      SUM(t.cache_write_tokens) as cache_write_tokens,
+      SUM(t.cost) as cost,
+      COUNT(DISTINCT t.session_id) as session_count
+    FROM token_usage t
+    JOIN sessions s ON s.id = t.session_id
+    WHERE s.started_at >= ? AND s.started_at < ?
+    GROUP BY t.model, s.project
+  `).all(dayStart, dayEnd) as {
+    model: string; project: string;
+    input_tokens: number; output_tokens: number;
+    cache_read_tokens: number; cache_write_tokens: number;
+    cost: number; session_count: number;
+  }[];
+
+  const toolStats = d.prepare(`
+    SELECT
+      COALESCE(s.project, '') as project,
+      COUNT(*) as tool_calls,
+      SUM(CASE WHEN ae.event_type = 'tool_result' AND ae.content LIKE '%error%' THEN 1 ELSE 0 END) as tool_failures
+    FROM agent_events ae
+    JOIN sessions s ON s.id = ae.session_id
+    WHERE ae.event_type IN ('tool_call', 'tool_result')
+      AND ae.timestamp >= ? AND ae.timestamp < ?
+    GROUP BY s.project
+  `).all(dayStart, dayEnd) as { project: string; tool_calls: number; tool_failures: number }[];
+
+  const toolMap = new Map(toolStats.map(r => [r.project, r]));
+
+  const upsert = d.prepare(`
+    INSERT INTO daily_usage (date, model, project, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, session_count, tool_calls, tool_failures)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(date, model, project) DO UPDATE SET
+      input_tokens = excluded.input_tokens,
+      output_tokens = excluded.output_tokens,
+      cache_read_tokens = excluded.cache_read_tokens,
+      cache_write_tokens = excluded.cache_write_tokens,
+      cost = excluded.cost,
+      session_count = excluded.session_count,
+      tool_calls = excluded.tool_calls,
+      tool_failures = excluded.tool_failures
+  `);
+
+  const runAll = d.transaction(() => {
+    for (const row of tokenRows) {
+      const tools = toolMap.get(row.project) || { tool_calls: 0, tool_failures: 0 };
+      upsert.run(date, row.model, row.project, row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens, row.cost, row.session_count, tools.tool_calls, tools.tool_failures);
+    }
+  });
+  runAll();
+}
+
+// --- Analytics Queries ---
+
+export function getAnalyticsOverview(from: number, to: number): import("@/types").AnalyticsOverview {
+  const d = getDb();
+  const periodLength = to - from;
+  const prevFrom = from - periodLength;
+  const prevTo = from;
+
+  const current = d.prepare(`
+    SELECT
+      COALESCE(SUM(cost), 0) as total_cost,
+      COUNT(DISTINCT session_id) as session_count,
+      COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+      COALESCE(SUM(output_tokens), 0) as total_output_tokens
+    FROM token_usage t
+    JOIN sessions s ON s.id = t.session_id
+    WHERE s.started_at >= ? AND s.started_at < ?
+  `).get(from, to) as { total_cost: number; session_count: number; total_input_tokens: number; total_output_tokens: number };
+
+  const prev = d.prepare(`
+    SELECT COALESCE(SUM(cost), 0) as total_cost
+    FROM token_usage t
+    JOIN sessions s ON s.id = t.session_id
+    WHERE s.started_at >= ? AND s.started_at < ?
+  `).get(prevFrom, prevTo) as { total_cost: number };
+
+  const costChangePct = prev.total_cost > 0
+    ? ((current.total_cost - prev.total_cost) / prev.total_cost) * 100
+    : 0;
+
+  const avgDuration = d.prepare(`
+    SELECT COALESCE(AVG(COALESCE(ended_at, ?) - started_at), 0) as avg_ms
+    FROM sessions
+    WHERE started_at >= ? AND started_at < ?
+  `).get(Date.now(), from, to) as { avg_ms: number };
+
+  const topModel = d.prepare(`
+    SELECT model, SUM(cost) as model_cost
+    FROM token_usage t
+    JOIN sessions s ON s.id = t.session_id
+    WHERE s.started_at >= ? AND s.started_at < ?
+    GROUP BY model ORDER BY model_cost DESC LIMIT 1
+  `).get(from, to) as { model: string; model_cost: number } | undefined;
+
+  const toolStats = d.prepare(`
+    SELECT
+      COUNT(CASE WHEN event_type = 'tool_call' THEN 1 END) as calls,
+      COUNT(CASE WHEN event_type = 'tool_result' THEN 1 END) as results
+    FROM agent_events
+    WHERE timestamp >= ? AND timestamp < ?
+  `).get(from, to) as { calls: number; results: number };
+
+  const toolFailures = d.prepare(`
+    SELECT COUNT(*) as failures
+    FROM agent_events
+    WHERE event_type = 'tool_result' AND timestamp >= ? AND timestamp < ?
+      AND (summary LIKE '%error%' OR summary LIKE '%fail%' OR summary LIKE '%Error%')
+  `).get(from, to) as { failures: number };
+
+  const successRate = toolStats.calls > 0
+    ? ((toolStats.calls - toolFailures.failures) / toolStats.calls) * 100
+    : 100;
+
+  return {
+    total_cost: current.total_cost,
+    cost_change_pct: Math.round(costChangePct * 10) / 10,
+    session_count: current.session_count,
+    avg_session_duration_ms: Math.round(avgDuration.avg_ms),
+    total_input_tokens: current.total_input_tokens,
+    total_output_tokens: current.total_output_tokens,
+    top_model: topModel?.model || "N/A",
+    top_model_cost_pct: topModel && current.total_cost > 0
+      ? Math.round((topModel.model_cost / current.total_cost) * 100)
+      : 0,
+    tool_call_count: toolStats.calls,
+    tool_success_rate: Math.round(successRate * 10) / 10,
+  };
+}
+
+export function getAnalyticsTrends(from: number, to: number, granularity: "hourly" | "daily"): import("@/types").TrendPoint[] {
+  const d = getDb();
+
+  if (granularity === "daily") {
+    return d.prepare(`
+      SELECT
+        date,
+        SUM(cost) as cost,
+        SUM(input_tokens + output_tokens) as tokens,
+        SUM(session_count) as sessions
+      FROM daily_usage
+      WHERE date >= ? AND date <= ?
+      GROUP BY date ORDER BY date ASC
+    `).all(
+      new Date(from).toISOString().slice(0, 10),
+      new Date(to).toISOString().slice(0, 10)
+    ) as import("@/types").TrendPoint[];
+  }
+
+  const rows = d.prepare(`
+    SELECT
+      strftime('%Y-%m-%dT%H:00', timestamp / 1000, 'unixepoch', 'localtime') as date,
+      0 as cost,
+      COUNT(*) as tokens,
+      0 as sessions
+    FROM agent_events
+    WHERE timestamp >= ? AND timestamp < ?
+    GROUP BY date ORDER BY date ASC
+  `).all(from, to) as import("@/types").TrendPoint[];
+
+  return rows;
+}
+
+export function getSessionAnalytics(from: number, to: number, sort = "started_at", order = "desc", limit = 20, offset = 0): import("@/types").SessionAnalyticRow[] {
+  const d = getDb();
+  const validSorts: Record<string, string> = {
+    started_at: "s.started_at",
+    cost: "cost",
+    duration: "duration_ms",
+    tokens: "total_tokens",
+  };
+  const sortCol = validSorts[sort] || "s.started_at";
+  const sortOrder = order === "asc" ? "ASC" : "DESC";
+
+  return d.prepare(`
+    SELECT
+      s.id as session_id,
+      s.project,
+      s.entrypoint,
+      s.status,
+      (COALESCE(s.ended_at, ?) - s.started_at) as duration_ms,
+      COALESCE((SELECT SUM(input_tokens + output_tokens) FROM token_usage WHERE session_id = s.id), 0) as total_tokens,
+      COALESCE((SELECT SUM(cost) FROM token_usage WHERE session_id = s.id), 0) as cost,
+      (SELECT COUNT(*) FROM agent_events WHERE session_id = s.id AND event_type = 'tool_call') as tool_count,
+      s.started_at
+    FROM sessions s
+    WHERE s.started_at >= ? AND s.started_at < ?
+    ORDER BY ${sortCol} ${sortOrder}
+    LIMIT ? OFFSET ?
+  `).all(Date.now(), from, to, limit, offset) as import("@/types").SessionAnalyticRow[];
+}
+
+export function getToolAnalytics(from: number, to: number): import("@/types").ToolAnalytics {
+  const d = getDb();
+
+  const tools = d.prepare(`
+    SELECT
+      tool_name,
+      COUNT(*) as call_count,
+      COUNT(*) as success_count,
+      0 as failure_count,
+      100.0 as success_rate,
+      0 as avg_duration_ms
+    FROM agent_events
+    WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
+      AND timestamp >= ? AND timestamp < ?
+    GROUP BY tool_name
+    ORDER BY call_count DESC
+  `).all(from, to) as import("@/types").ToolAnalyticEntry[];
+
+  for (const tool of tools) {
+    const failures = d.prepare(`
+      SELECT COUNT(*) as cnt FROM agent_events
+      WHERE event_type = 'tool_result' AND tool_name = ?
+        AND timestamp >= ? AND timestamp < ?
+        AND (summary LIKE '%error%' OR summary LIKE '%fail%' OR summary LIKE '%Error%' OR summary LIKE '%FAIL%')
+    `).get(tool.tool_name, from, to) as { cnt: number };
+    tool.failure_count = failures.cnt;
+    tool.success_count = tool.call_count - tool.failure_count;
+    tool.success_rate = tool.call_count > 0
+      ? Math.round((tool.success_count / tool.call_count) * 1000) / 10
+      : 100;
+  }
+
+  for (const tool of tools) {
+    const avgDur = d.prepare(`
+      SELECT AVG(tr.timestamp - tc.timestamp) as avg_ms
+      FROM agent_events tc
+      JOIN agent_events tr ON tr.agent_id = tc.agent_id
+        AND tr.event_type = 'tool_result'
+        AND tr.tool_name = tc.tool_name
+        AND tr.timestamp > tc.timestamp
+        AND tr.timestamp < tc.timestamp + 300000
+      WHERE tc.event_type = 'tool_call' AND tc.tool_name = ?
+        AND tc.timestamp >= ? AND tc.timestamp < ?
+    `).get(tool.tool_name, from, to) as { avg_ms: number | null };
+    tool.avg_duration_ms = Math.round(avgDur.avg_ms || 0);
+  }
+
+  const timeline = d.prepare(`
+    SELECT
+      tool_name,
+      timestamp,
+      1 as success,
+      0 as duration_ms
+    FROM agent_events
+    WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
+      AND timestamp >= ? AND timestamp < ?
+    ORDER BY timestamp DESC
+    LIMIT 500
+  `).all(from, to) as import("@/types").ToolTimelinePoint[];
+
+  return { tools, timeline: timeline.reverse() };
+}
+
+export function getFileAnalytics(from: number, to: number): import("@/types").FileAnalytics {
+  const d = getDb();
+
+  const rows = d.prepare(`
+    SELECT files_affected, tool_name
+    FROM agent_events
+    WHERE files_affected IS NOT NULL AND files_affected != ''
+      AND timestamp >= ? AND timestamp < ?
+  `).all(from, to) as { files_affected: string; tool_name: string | null }[];
+
+  const fileMap = new Map<string, { count: number; tools: Map<string, number> }>();
+
+  for (const row of rows) {
+    let files: string[];
+    try { files = JSON.parse(row.files_affected); } catch { continue; }
+    if (!Array.isArray(files)) continue;
+    for (const f of files) {
+      if (!f || typeof f !== "string") continue;
+      const entry = fileMap.get(f) || { count: 0, tools: new Map() };
+      entry.count++;
+      if (row.tool_name) {
+        entry.tools.set(row.tool_name, (entry.tools.get(row.tool_name) || 0) + 1);
+      }
+      fileMap.set(f, entry);
+    }
+  }
+
+  const files: import("@/types").FileEntry[] = Array.from(fileMap.entries())
+    .map(([filePath, data]) => {
+      const parts = filePath.split("/");
+      const fileName = parts.pop() || filePath;
+      const directory = parts.join("/") || ".";
+      return {
+        file_path: filePath,
+        directory,
+        file_name: fileName,
+        modification_count: data.count,
+        tools_used: Array.from(data.tools.keys()),
+        tool_breakdown: Object.fromEntries(data.tools),
+      };
+    })
+    .sort((a, b) => b.modification_count - a.modification_count)
+    .slice(0, 50);
+
+  const dirMap = new Map<string, number>();
+  for (const f of files) {
+    dirMap.set(f.directory, (dirMap.get(f.directory) || 0) + f.modification_count);
+  }
+  const directories = Array.from(dirMap.entries())
+    .map(([directory, total_modifications]) => ({ directory, total_modifications }))
+    .sort((a, b) => b.total_modifications - a.total_modifications);
+
+  return { files, directories };
+}
+
+export function getModelAnalytics(from: number, to: number): import("@/types").ModelAnalytics {
+  const d = getDb();
+
+  const models = d.prepare(`
+    SELECT
+      t.model,
+      SUM(t.cost) as cost,
+      SUM(t.input_tokens) as input_tokens,
+      SUM(t.output_tokens) as output_tokens,
+      SUM(t.cache_read_tokens) as cache_read_tokens,
+      SUM(t.cache_write_tokens) as cache_write_tokens
+    FROM token_usage t
+    JOIN sessions s ON s.id = t.session_id
+    WHERE s.started_at >= ? AND s.started_at < ?
+    GROUP BY t.model
+    ORDER BY cost DESC
+  `).all(from, to) as import("@/types").ModelEntry[];
+
+  const trend = d.prepare(`
+    SELECT date, model, SUM(cost) as cost, SUM(input_tokens + output_tokens) as tokens
+    FROM daily_usage
+    WHERE date >= ? AND date <= ?
+    GROUP BY date, model
+    ORDER BY date ASC
+  `).all(
+    new Date(from).toISOString().slice(0, 10),
+    new Date(to).toISOString().slice(0, 10)
+  ) as import("@/types").ModelTrendPoint[];
+
+  return { models, trend };
 }
