@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
-import { getMonitorStats } from "@/lib/db";
+import { getMonitorStats, abandonStaleSessions, archiveStaleAgents } from "@/lib/db";
 import type { ApiResponse, MonitorStats } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<NextResponse<ApiResponse<MonitorStats>>> {
   try {
+    // Clean up stale sessions periodically (runs every ~30s via SWR refresh)
+    abandonStaleSessions();
+    archiveStaleAgents();
     const stats = getMonitorStats();
     return NextResponse.json({ success: true, data: stats });
   } catch (error) {
