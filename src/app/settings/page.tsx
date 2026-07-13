@@ -116,6 +116,27 @@ export default function SettingsPage() {
             credentials?.claude as Record<string, string | undefined>
           }
         />
+
+        <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="h-1" style={{ backgroundColor: "#10A37F" }} />
+          <div className="p-5">
+            <h3 className="mb-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              OpenAI (ChatGPT/Codex)
+            </h3>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              No configuration needed — usage is read automatically from your
+              Codex CLI login (
+              <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">
+                ~/.codex/auth.json
+              </code>
+              ). If it shows as disconnected, run{" "}
+              <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">
+                codex login
+              </code>{" "}
+              in a terminal.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="mt-8 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-800/50">

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import type { AgentRecord, AgentEvent } from "@/types";
 import { FONT_CLASSES, type MonitorFontSize } from "@/hooks/use-monitor-settings";
+import { useNow } from "@/hooks/use-now";
 
 interface AgentCardProps {
   agent: AgentRecord;
@@ -51,28 +52,18 @@ const EVENT_COLORS: Record<string, string> = {
 export function AgentCard({ agent, events, onExpandEvents, compact, fontSize = "sm" }: AgentCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
-  const [elapsed, setElapsed] = useState("");
+  // All cards share one interval via the useNow() store — no per-card timers
+  const now = useNow();
 
   const fc = FONT_CLASSES[fontSize];
   const status = STATUS_CONFIG[agent.status] || STATUS_CONFIG.working;
 
-  // Live elapsed timer
-  useEffect(() => {
-    const update = () => {
-      const start = agent.started_at;
-      const end = agent.ended_at || Date.now();
-      const diff = end - start;
-      const s = Math.floor(diff / 1000) % 60;
-      const m = Math.floor(diff / 60000) % 60;
-      const h = Math.floor(diff / 3600000);
-      setElapsed(h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`);
-    };
-    update();
-    if (agent.status === "working" || agent.status === "idle") {
-      const interval = setInterval(update, 1000);
-      return () => clearInterval(interval);
-    }
-  }, [agent.started_at, agent.ended_at, agent.status]);
+  const end = agent.ended_at || now;
+  const diff = Math.max(0, end - agent.started_at);
+  const s = Math.floor(diff / 1000) % 60;
+  const m = Math.floor(diff / 60000) % 60;
+  const h = Math.floor(diff / 3600000);
+  const elapsed = h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
 
   const handleToggleExpand = () => {
     const next = !expanded;

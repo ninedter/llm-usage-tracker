@@ -2,7 +2,6 @@ import {
   app,
   BrowserWindow,
   shell,
-  nativeImage,
   Menu,
   nativeTheme,
   utilityProcess,
@@ -15,6 +14,7 @@ import {
   writeFileSync,
   mkdirSync,
   copyFileSync,
+  readdirSync,
 } from "fs";
 import { randomBytes } from "crypto";
 import { createTray } from "./tray";
@@ -64,7 +64,7 @@ async function waitForServer(
     } catch {
       // server not ready yet
     }
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 1000));
   }
   throw new Error(`Server did not start within ${timeoutMs}ms`);
 }
@@ -148,7 +148,6 @@ async function startServer(): Promise<number> {
     try {
       const chunkDir = join(basePath, ".next", "standalone", ".next", "server", "chunks");
       if (existsSync(chunkDir)) {
-        const { readdirSync } = require("fs");
         const chunkFiles = readdirSync(chunkDir).filter((f: string) => f.endsWith(".js"));
         for (const chunkFile of chunkFiles) {
           const content = readFileSync(join(chunkDir, chunkFile), "utf8");

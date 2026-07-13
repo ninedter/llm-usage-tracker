@@ -15,6 +15,12 @@ export const PROVIDER_INFO: Record<
     bgColor: "bg-orange-50 dark:bg-orange-950/20",
     consoleUrl: "https://console.anthropic.com/",
   },
+  openai: {
+    displayName: "OpenAI (ChatGPT/Codex)",
+    color: "#10A37F",
+    bgColor: "bg-emerald-50 dark:bg-emerald-950/20",
+    consoleUrl: "https://chatgpt.com/",
+  },
 };
 
 export const USAGE_THRESHOLDS = {

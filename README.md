@@ -12,6 +12,7 @@ A native macOS desktop application for monitoring AI usage quotas and tracking C
 
 ### Usage Monitoring
 - **Claude API quota tracking** — 5-hour and 7-day usage windows with progress bars
+- **OpenAI (ChatGPT/Codex) quota tracking** — Rate-limit windows and per-feature limits, auto-detected from your Codex CLI login (`~/.codex/auth.json`)
 - **Per-model breakdown** — See usage split across Sonnet, Opus, Haiku, etc.
 - **Auto-refresh** — Configurable polling interval for live quota updates
 - **Encrypted credential storage** — API keys are stored securely with AES-256
@@ -90,6 +91,27 @@ npm install
 # Rebuild native modules for Electron
 npx electron-rebuild -f -w better-sqlite3
 ```
+
+### Docker (continuous headless tracking)
+
+Run the tracker 24/7 without the Electron app — the same server, containerized:
+
+```bash
+# One-time: seed the Claude credentials into the Docker data dir
+mkdir -p .docker-data && cp credentials.enc.json .docker-data/
+
+# Build and start (restarts automatically with Docker)
+docker compose up -d --build
+
+# Dashboard
+open http://localhost:3789
+```
+
+Notes:
+- `~/.codex` is mounted read-only so OpenAI usage tracking follows your Codex CLI login automatically.
+- `ENCRYPTION_KEY` is passed from `.env.local` via `env_file` — required, or stored credentials can't be decrypted.
+- Claude Code hooks automatically fall back to the container (port `3789`) whenever the Electron app isn't running, so agent activity is captured continuously.
+- Data persists in `./.docker-data` (SQLite).
 
 ### Development
 

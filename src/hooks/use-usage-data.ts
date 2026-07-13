@@ -4,6 +4,7 @@ import useSWR from "swr";
 import type {
   ApiResponse,
   ClaudeUsageData,
+  OpenAIUsageData,
   ProviderHealth,
 } from "@/types";
 import { REFRESH_INTERVALS } from "@/lib/constants";
@@ -18,6 +19,14 @@ async function fetcher<T>(url: string): Promise<T> {
 export function useClaudeUsage(enabled: boolean) {
   return useSWR<ClaudeUsageData>(
     enabled ? "/api/usage/claude" : null,
+    fetcher,
+    { refreshInterval: REFRESH_INTERVALS.usage, revalidateOnFocus: true }
+  );
+}
+
+export function useOpenAIUsage(enabled: boolean) {
+  return useSWR<OpenAIUsageData>(
+    enabled ? "/api/usage/openai" : null,
     fetcher,
     { refreshInterval: REFRESH_INTERVALS.usage, revalidateOnFocus: true }
   );

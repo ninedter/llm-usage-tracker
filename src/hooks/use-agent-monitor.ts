@@ -27,11 +27,23 @@ export function useAgentMonitor() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Initial fetch of all agents
-  const { data: initialAgents, mutate: refetchAgents } = useSWR<AgentRecord[]>(
+  // Initial fetch of all agents — each successful fetch seeds the agents map
+  const { mutate: refetchAgents } = useSWR<AgentRecord[]>(
     "/api/monitor/agents?limit=200",
     fetcher,
-    { revalidateOnFocus: false, refreshInterval: 30_000 }
+    {
+      revalidateOnFocus: false,
+      refreshInterval: 30_000,
+      onSuccess: (fetched) => {
+        setAgents((prev) => {
+          const next = new Map(prev);
+          for (const a of fetched) {
+            next.set(a.id, a);
+          }
+          return next;
+        });
+      },
+    }
   );
 
   // Fetch sessions
@@ -53,19 +65,6 @@ export function useAgentMonitor() {
   const refetchStatsRef = useRef(refetchStats);
   useEffect(() => { refetchSessionsRef.current = refetchSessions; }, [refetchSessions]);
   useEffect(() => { refetchStatsRef.current = refetchStats; }, [refetchStats]);
-
-  // Seed the agents map from SWR data
-  useEffect(() => {
-    if (initialAgents) {
-      setAgents((prev) => {
-        const next = new Map(prev);
-        for (const a of initialAgents) {
-          next.set(a.id, a);
-        }
-        return next;
-      });
-    }
-  }, [initialAgents]);
 
   // SSE connection for real-time updates — stable deps, never re-subscribes
   useEffect(() => {
@@ -182,6 +181,15 @@ export function useAgentMonitor() {
     refetchStats();
   }, [refetchAgents, refetchSessions, refetchStats]);
 
+  // Drop all client-held monitor state. agents/events/recentActivity are
+  // merge-only (SWR onSuccess and SSE both only add), so after a destructive
+  // server op like Clear All a refetch alone leaves stale entries behind.
+  const reset = useCallback(() => {
+    setAgents(new Map());
+    setEvents(new Map());
+    setRecentActivity([]);
+  }, []);
+
   return {
     agents: agentList,
     workingAgents,
@@ -197,5 +205,6 @@ export function useAgentMonitor() {
     connected,
     fetchAgentEvents,
     refetchAll,
+    reset,
   };
 }

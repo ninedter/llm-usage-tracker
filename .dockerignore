@@ -1,0 +1,22 @@
+# Build artifacts
+node_modules
+.next
+dist-electron
+build
+electron/*.js
+*.tsbuildinfo
+
+# Data and secrets — never bake into image layers; mounted/passed at runtime
+.data
+.docker-data
+credentials.enc.json
+.env*
+
+# Repo noise
+.git
+.claude
+.superpowers
+docs
+hooks
+*.md
+.DS_Store

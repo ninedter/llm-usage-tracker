@@ -469,14 +469,27 @@ export function archiveStaleAgents(): number {
   return result.changes;
 }
 
+function localDateStr(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function rollupDailyUsage(dateStr?: string): void {
-  const d = getDb();
-  const date = dateStr || new Date().toISOString().slice(0, 10);
+  const date = dateStr || localDateStr(Date.now());
   const dayStart = new Date(date + "T00:00:00").getTime();
-  const dayEnd = dayStart + 86400000;
+  rollupDailyUsageRange(dayStart, dayStart + 86400000);
+}
+
+// Upserts daily_usage for every local calendar day in [from, to). Grouped in a
+// single pass so analytics routes can backfill days the app wasn't running.
+export function rollupDailyUsageRange(from: number, to: number): void {
+  const d = getDb();
+  // Bound the scan: daily_usage older than the cap is already immutable history
+  const minFrom = Math.max(from, to - 92 * 86400000);
 
   const tokenRows = d.prepare(`
     SELECT
+      strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch', 'localtime') as date,
       t.model,
       COALESCE(s.project, '') as project,
       SUM(t.input_tokens) as input_tokens,
@@ -488,16 +501,19 @@ export function rollupDailyUsage(dateStr?: string): void {
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id
     WHERE s.started_at >= ? AND s.started_at < ?
-    GROUP BY t.model, s.project
-  `).all(dayStart, dayEnd) as {
-    model: string; project: string;
+    GROUP BY date, t.model, s.project
+  `).all(minFrom, to) as {
+    date: string; model: string; project: string;
     input_tokens: number; output_tokens: number;
     cache_read_tokens: number; cache_write_tokens: number;
     cost: number; session_count: number;
   }[];
 
+  if (tokenRows.length === 0) return;
+
   const toolStats = d.prepare(`
     SELECT
+      strftime('%Y-%m-%d', ae.timestamp / 1000, 'unixepoch', 'localtime') as date,
       COALESCE(s.project, '') as project,
       COUNT(*) as tool_calls,
       SUM(CASE WHEN ae.event_type = 'tool_result' AND ae.content LIKE '%error%' THEN 1 ELSE 0 END) as tool_failures
@@ -505,10 +521,10 @@ export function rollupDailyUsage(dateStr?: string): void {
     JOIN sessions s ON s.id = ae.session_id
     WHERE ae.event_type IN ('tool_call', 'tool_result')
       AND ae.timestamp >= ? AND ae.timestamp < ?
-    GROUP BY s.project
-  `).all(dayStart, dayEnd) as { project: string; tool_calls: number; tool_failures: number }[];
+    GROUP BY date, s.project
+  `).all(minFrom, to) as { date: string; project: string; tool_calls: number; tool_failures: number }[];
 
-  const toolMap = new Map(toolStats.map(r => [r.project, r]));
+  const toolMap = new Map(toolStats.map(r => [`${r.date}|${r.project}`, r]));
 
   const upsert = d.prepare(`
     INSERT INTO daily_usage (date, model, project, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, session_count, tool_calls, tool_failures)
@@ -526,8 +542,8 @@ export function rollupDailyUsage(dateStr?: string): void {
 
   const runAll = d.transaction(() => {
     for (const row of tokenRows) {
-      const tools = toolMap.get(row.project) || { tool_calls: 0, tool_failures: 0 };
-      upsert.run(date, row.model, row.project, row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens, row.cost, row.session_count, tools.tool_calls, tools.tool_failures);
+      const tools = toolMap.get(`${row.date}|${row.project}`) || { tool_calls: 0, tool_failures: 0 };
+      upsert.run(row.date, row.model, row.project, row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens, row.cost, row.session_count, tools.tool_calls, tools.tool_failures);
     }
   });
   runAll();
@@ -541,16 +557,23 @@ export function getAnalyticsOverview(from: number, to: number): import("@/types"
   const prevFrom = from - periodLength;
   const prevTo = from;
 
-  const current = d.prepare(`
+  // Token/cost data (may be empty if no API usage tracking)
+  const tokenData = d.prepare(`
     SELECT
       COALESCE(SUM(cost), 0) as total_cost,
-      COUNT(DISTINCT session_id) as session_count,
       COALESCE(SUM(input_tokens), 0) as total_input_tokens,
       COALESCE(SUM(output_tokens), 0) as total_output_tokens
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id
     WHERE s.started_at >= ? AND s.started_at < ?
-  `).get(from, to) as { total_cost: number; session_count: number; total_input_tokens: number; total_output_tokens: number };
+  `).get(from, to) as { total_cost: number; total_input_tokens: number; total_output_tokens: number };
+
+  // Session count from sessions table directly (independent of token data)
+  const sessionData = d.prepare(`
+    SELECT COUNT(*) as session_count
+    FROM sessions
+    WHERE started_at >= ? AND started_at < ?
+  `).get(from, to) as { session_count: number };
 
   const prev = d.prepare(`
     SELECT COALESCE(SUM(cost), 0) as total_cost
@@ -560,7 +583,7 @@ export function getAnalyticsOverview(from: number, to: number): import("@/types"
   `).get(prevFrom, prevTo) as { total_cost: number };
 
   const costChangePct = prev.total_cost > 0
-    ? ((current.total_cost - prev.total_cost) / prev.total_cost) * 100
+    ? ((tokenData.total_cost - prev.total_cost) / prev.total_cost) * 100
     : 0;
 
   const avgDuration = d.prepare(`
@@ -597,15 +620,15 @@ export function getAnalyticsOverview(from: number, to: number): import("@/types"
     : 100;
 
   return {
-    total_cost: current.total_cost,
+    total_cost: tokenData.total_cost,
     cost_change_pct: Math.round(costChangePct * 10) / 10,
-    session_count: current.session_count,
+    session_count: sessionData.session_count,
     avg_session_duration_ms: Math.round(avgDuration.avg_ms),
-    total_input_tokens: current.total_input_tokens,
-    total_output_tokens: current.total_output_tokens,
+    total_input_tokens: tokenData.total_input_tokens,
+    total_output_tokens: tokenData.total_output_tokens,
     top_model: topModel?.model || "N/A",
-    top_model_cost_pct: topModel && current.total_cost > 0
-      ? Math.round((topModel.model_cost / current.total_cost) * 100)
+    top_model_cost_pct: topModel && tokenData.total_cost > 0
+      ? Math.round((topModel.model_cost / tokenData.total_cost) * 100)
       : 0,
     tool_call_count: toolStats.calls,
     tool_success_rate: Math.round(successRate * 10) / 10,
@@ -614,35 +637,70 @@ export function getAnalyticsOverview(from: number, to: number): import("@/types"
 
 export function getAnalyticsTrends(from: number, to: number, granularity: "hourly" | "daily"): import("@/types").TrendPoint[] {
   const d = getDb();
+  const bucketExpr = granularity === "daily" ? "%Y-%m-%d" : "%Y-%m-%dT%H:00";
 
-  if (granularity === "daily") {
-    return d.prepare(`
-      SELECT
-        date,
-        SUM(cost) as cost,
-        SUM(input_tokens + output_tokens) as tokens,
-        SUM(session_count) as sessions
-      FROM daily_usage
-      WHERE date >= ? AND date <= ?
-      GROUP BY date ORDER BY date ASC
-    `).all(
-      new Date(from).toISOString().slice(0, 10),
-      new Date(to).toISOString().slice(0, 10)
-    ) as import("@/types").TrendPoint[];
-  }
+  // Sessions counted from the sessions table directly — a day with sessions
+  // must show even when no token/cost data was captured for it.
+  const sessionRows = d.prepare(`
+    SELECT strftime('${bucketExpr}', started_at / 1000, 'unixepoch', 'localtime') as date, COUNT(*) as n
+    FROM sessions
+    WHERE started_at >= ? AND started_at < ?
+    GROUP BY date
+  `).all(from, to) as { date: string; n: number }[];
 
-  const rows = d.prepare(`
-    SELECT
-      strftime('%Y-%m-%dT%H:00', timestamp / 1000, 'unixepoch', 'localtime') as date,
-      0 as cost,
-      COUNT(*) as tokens,
-      0 as sessions
+  const eventRows = d.prepare(`
+    SELECT strftime('${bucketExpr}', timestamp / 1000, 'unixepoch', 'localtime') as date, COUNT(*) as n
     FROM agent_events
     WHERE timestamp >= ? AND timestamp < ?
-    GROUP BY date ORDER BY date ASC
-  `).all(from, to) as import("@/types").TrendPoint[];
+    GROUP BY date
+  `).all(from, to) as { date: string; n: number }[];
 
-  return rows;
+  const costRows = granularity === "daily"
+    ? d.prepare(`
+        SELECT date, SUM(cost) as cost, SUM(input_tokens + output_tokens) as tokens
+        FROM daily_usage
+        WHERE date >= ? AND date <= ?
+        GROUP BY date
+      `).all(localDateStr(from), localDateStr(to)) as { date: string; cost: number; tokens: number }[]
+    : [];
+
+  const sessions = new Map(sessionRows.map(r => [r.date, r.n]));
+  const events = new Map(eventRows.map(r => [r.date, r.n]));
+  const costs = new Map(costRows.map(r => [r.date, r]));
+
+  // Gap-fill every bucket in the range so sparse data doesn't collapse into a
+  // single full-width bar. For open-ended ranges (from=0) start at the first
+  // bucket that has data.
+  const stepMs = granularity === "daily" ? 86400000 : 3600000;
+  const allDates = [...sessions.keys(), ...events.keys(), ...costs.keys()].sort();
+  const maxBuckets = granularity === "daily" ? 366 : 168;
+  let start = new Date(Math.max(from, to - maxBuckets * stepMs));
+  if (from === 0 && allDates.length > 0) {
+    const firstMs = new Date(granularity === "daily" ? allDates[0] + "T00:00:00" : allDates[0]).getTime();
+    start = new Date(Math.max(firstMs, start.getTime()));
+  }
+  if (granularity === "daily") start.setHours(0, 0, 0, 0);
+  else start.setMinutes(0, 0, 0);
+
+  const points: import("@/types").TrendPoint[] = [];
+  const cursor = start;
+  while (cursor.getTime() <= to && points.length <= maxBuckets) {
+    const key = granularity === "daily"
+      ? localDateStr(cursor.getTime())
+      : `${localDateStr(cursor.getTime())}T${String(cursor.getHours()).padStart(2, "0")}:00`;
+    const cost = costs.get(key);
+    points.push({
+      date: key,
+      cost: cost?.cost || 0,
+      tokens: cost?.tokens || 0,
+      events: events.get(key) || 0,
+      sessions: sessions.get(key) || 0,
+    });
+    if (granularity === "daily") cursor.setDate(cursor.getDate() + 1);
+    else cursor.setHours(cursor.getHours() + 1);
+  }
+
+  return points;
 }
 
 export function getSessionAnalytics(from: number, to: number, sort = "started_at", order = "desc", limit = 20, offset = 0): import("@/types").SessionAnalyticRow[] {
@@ -816,10 +874,133 @@ export function getModelAnalytics(from: number, to: number): import("@/types").M
     WHERE date >= ? AND date <= ?
     GROUP BY date, model
     ORDER BY date ASC
-  `).all(
-    new Date(from).toISOString().slice(0, 10),
-    new Date(to).toISOString().slice(0, 10)
-  ) as import("@/types").ModelTrendPoint[];
+  `).all(localDateStr(from), localDateStr(to)) as import("@/types").ModelTrendPoint[];
 
   return { models, trend };
+}
+
+const EXPLORE_TOOLS = "('Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch')";
+const MODIFY_TOOLS = "('Edit', 'Write', 'NotebookEdit')";
+
+export function getUsageInsights(from: number, to: number): import("@/types").UsageInsights {
+  const d = getDb();
+
+  const heatmap = d.prepare(`
+    SELECT
+      CAST(strftime('%w', timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) as dow,
+      CAST(strftime('%H', timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) as hour,
+      COUNT(*) as events
+    FROM agent_events
+    WHERE timestamp >= ? AND timestamp < ?
+    GROUP BY dow, hour
+  `).all(from, to) as import("@/types").HeatmapCell[];
+
+  const projects = d.prepare(`
+    SELECT
+      s.project,
+      COUNT(DISTINCT s.id) as sessions,
+      COUNT(ae.id) as events,
+      SUM(CASE WHEN ae.event_type = 'tool_call' THEN 1 ELSE 0 END) as tool_calls,
+      COUNT(DISTINCT strftime('%Y-%m-%d', ae.timestamp / 1000, 'unixepoch', 'localtime')) as active_days,
+      MAX(s.updated_at) as last_active
+    FROM sessions s
+    LEFT JOIN agent_events ae ON ae.session_id = s.id AND ae.timestamp >= ? AND ae.timestamp < ?
+    WHERE s.started_at >= ? AND s.started_at < ?
+    GROUP BY s.project
+    ORDER BY events DESC
+    LIMIT 12
+  `).all(from, to, from, to) as import("@/types").ProjectUsage[];
+
+  const dayRows = d.prepare(`
+    SELECT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch', 'localtime') as date, COUNT(*) as events
+    FROM agent_events
+    WHERE timestamp >= ? AND timestamp < ?
+    GROUP BY date
+    ORDER BY events DESC
+  `).all(from, to) as { date: string; events: number }[];
+
+  const peakHourRow = d.prepare(`
+    SELECT CAST(strftime('%H', timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) as hour, COUNT(*) as events
+    FROM agent_events
+    WHERE timestamp >= ? AND timestamp < ?
+    GROUP BY hour
+    ORDER BY events DESC
+    LIMIT 1
+  `).get(from, to) as { hour: number; events: number } | undefined;
+
+  // Sessions that never received a SessionEnd hook have ended_at NULL — clamp
+  // their duration to the last observed event instead of "still running"
+  const sessionAgg = d.prepare(`
+    SELECT
+      COUNT(*) as n,
+      COALESCE(MAX(
+        COALESCE(
+          s.ended_at,
+          (SELECT MAX(ae.timestamp) FROM agent_events ae WHERE ae.session_id = s.id),
+          s.started_at
+        ) - s.started_at
+      ), 0) as longest_ms
+    FROM sessions s
+    WHERE s.started_at >= ? AND s.started_at < ?
+  `).get(from, to) as { n: number; longest_ms: number };
+
+  const eventCount = d.prepare(
+    "SELECT COUNT(*) as n FROM agent_events WHERE timestamp >= ? AND timestamp < ?"
+  ).get(from, to) as { n: number };
+
+  const toolMix = d.prepare(`
+    SELECT
+      SUM(CASE WHEN tool_name IN ${EXPLORE_TOOLS} THEN 1 ELSE 0 END) as explore_calls,
+      SUM(CASE WHEN tool_name IN ${MODIFY_TOOLS} THEN 1 ELSE 0 END) as modify_calls
+    FROM agent_events
+    WHERE event_type = 'tool_call' AND timestamp >= ? AND timestamp < ?
+  `).get(from, to) as { explore_calls: number | null; modify_calls: number | null };
+
+  const topTool = d.prepare(`
+    SELECT tool_name, COUNT(*) as n
+    FROM agent_events
+    WHERE event_type = 'tool_call' AND tool_name IS NOT NULL AND timestamp >= ? AND timestamp < ?
+    GROUP BY tool_name ORDER BY n DESC LIMIT 1
+  `).get(from, to) as { tool_name: string; n: number } | undefined;
+
+  // Streak: consecutive local days with activity, counting back from today
+  // (independent of the selected range so it reads as "as of now")
+  const recentDays = d.prepare(`
+    SELECT DISTINCT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch', 'localtime') as date
+    FROM agent_events
+    WHERE timestamp >= ?
+  `).all(Date.now() - 60 * 86400000) as { date: string }[];
+  const daySet = new Set(recentDays.map(r => r.date));
+  let streak = 0;
+  const cursor = new Date();
+  // A day without activity yet (early morning) shouldn't zero the streak
+  if (!daySet.has(localDateStr(cursor.getTime()))) cursor.setDate(cursor.getDate() - 1);
+  while (daySet.has(localDateStr(cursor.getTime()))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  const effectiveFrom = from > 0
+    ? from
+    : (dayRows.length > 0
+        ? Math.min(...dayRows.map(r => new Date(r.date + "T00:00:00").getTime()))
+        : to);
+  const totalDays = Math.max(1, Math.ceil((to - effectiveFrom) / 86400000));
+
+  return {
+    heatmap,
+    projects,
+    stats: {
+      active_days: dayRows.length,
+      total_days: totalDays,
+      current_streak: streak,
+      busiest_day: dayRows.length > 0 ? { date: dayRows[0].date, events: dayRows[0].events } : null,
+      peak_hour: peakHourRow ?? null,
+      longest_session_ms: sessionAgg.longest_ms,
+      avg_events_per_session: sessionAgg.n > 0 ? Math.round(eventCount.n / sessionAgg.n) : 0,
+      explore_calls: toolMix.explore_calls || 0,
+      modify_calls: toolMix.modify_calls || 0,
+      top_tool: topTool?.tool_name ?? null,
+    },
+  };
 }

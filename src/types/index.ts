@@ -1,4 +1,4 @@
-export type ProviderId = "claude";
+export type ProviderId = "claude" | "openai";
 
 export type UsageLevel = "safe" | "moderate" | "critical";
 
@@ -53,6 +53,24 @@ export interface ClaudeUsageData {
   lastUpdated: string;
 }
 
+// Rate-limit windows vary by plan (some have only a weekly window,
+// Plus/Pro also have a 5-hour window), so they're a list rather than
+// fixed session/weekly fields.
+export interface OpenAIRateWindow {
+  label: string;
+  windowSeconds: number;
+  percentage: number;
+  resetTime: string | null;
+  level: UsageLevel;
+}
+
+export interface OpenAIUsageData {
+  planType: string;
+  windows: OpenAIRateWindow[];
+  featureLimits: OpenAIRateWindow[];
+  lastUpdated: string;
+}
+
 // --- API Responses ---
 
 export interface ApiResponse<T> {
@@ -66,6 +84,7 @@ export interface ApiResponse<T> {
 
 export interface ProviderHealth {
   claude: { connected: boolean; error?: string };
+  openai: { connected: boolean; error?: string };
 }
 
 // --- Agent Monitor ---
@@ -184,6 +203,7 @@ export interface TrendPoint {
   date: string;
   cost: number;
   tokens: number;
+  events: number;
   sessions: number;
 }
 
@@ -253,4 +273,38 @@ export interface ModelTrendPoint {
 export interface ModelAnalytics {
   models: ModelEntry[];
   trend: ModelTrendPoint[];
+}
+
+export interface HeatmapCell {
+  dow: number; // 0 = Sunday … 6 = Saturday (SQLite %w)
+  hour: number; // 0-23 local time
+  events: number;
+}
+
+export interface ProjectUsage {
+  project: string;
+  sessions: number;
+  events: number;
+  tool_calls: number;
+  active_days: number;
+  last_active: number;
+}
+
+export interface UsageInsightStats {
+  active_days: number;
+  total_days: number;
+  current_streak: number;
+  busiest_day: { date: string; events: number } | null;
+  peak_hour: { hour: number; events: number } | null;
+  longest_session_ms: number;
+  avg_events_per_session: number;
+  explore_calls: number;
+  modify_calls: number;
+  top_tool: string | null;
+}
+
+export interface UsageInsights {
+  heatmap: HeatmapCell[];
+  projects: ProjectUsage[];
+  stats: UsageInsightStats;
 }

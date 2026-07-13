@@ -6,8 +6,10 @@ import { AgentMonitorPanel } from "@/components/monitor/AgentMonitorPanel";
 import { RefreshControl } from "@/components/dashboard/RefreshControl";
 
 export default function Home() {
+  // h-[calc(100vh-2rem)] (viewport minus the h-8 titlebar) caps the page so the
+  // activity feed scrolls internally instead of stretching the usage cards
   return (
-    <div className="mx-auto flex w-full flex-1 flex-col px-4 pb-4">
+    <div className="mx-auto flex h-[calc(100vh-2rem)] w-full flex-col px-4 pb-4">
       {/* Header — draggable for Electron window movement */}
       <div className="titlebar-drag mb-4 flex items-center justify-between pt-2">
         <div>
@@ -68,9 +70,10 @@ export default function Home() {
       </div>
 
       {/* Main content — usage left, agent monitor right */}
-      <div className="flex flex-1 gap-4 overflow-hidden">
-        {/* Usage card */}
-        <div className="w-80 flex-shrink-0">
+      {/* min-h-0 lets this row shrink below its content so overflow actually clips */}
+      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
+        {/* Usage cards */}
+        <div className="w-80 flex-shrink-0 overflow-y-auto">
           <DashboardGrid />
         </div>
 

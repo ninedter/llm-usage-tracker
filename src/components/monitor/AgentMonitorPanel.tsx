@@ -2,8 +2,9 @@
 
 import { useAgentMonitor } from "@/hooks/use-agent-monitor";
 import { AgentCard } from "@/components/monitor/AgentCard";
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useMonitorSettings, type MonitorFontSize } from "@/hooks/use-monitor-settings";
+import { useNow } from "@/hooks/use-now";
 import type { AgentEvent, AgentSession } from "@/types";
 
 type ViewMode = "activity" | "agents" | "sessions";
@@ -42,16 +43,16 @@ const FONT_SIZE_ICONS: Record<MonitorFontSize, string> = {
   lg: "L",
 };
 
-function formatRelativeTime(ts: number): string {
-  const diff = Date.now() - ts;
+function formatRelativeTime(ts: number, now: number): string {
+  const diff = now - ts;
   if (diff < 5000) return "just now";
   if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
   return `${Math.floor(diff / 3600000)}h ago`;
 }
 
-function formatDuration(start: number, end: number | null): string {
-  const diff = (end || Date.now()) - start;
+function formatDuration(start: number, end: number | null, now: number): string {
+  const diff = (end || now) - start;
   const m = Math.floor(diff / 60000);
   const h = Math.floor(diff / 3600000);
   if (h > 0) return `${h}h ${m % 60}m`;
@@ -61,6 +62,7 @@ function formatDuration(start: number, end: number | null): string {
 
 // Activity feed item
 function ActivityItem({ event, fc }: { event: AgentEvent; fc: ReturnType<typeof useMonitorSettings>["fontClasses"] }) {
+  const now = useNow();
   const dotColor = EVENT_DOT_COLORS[event.event_type] || "bg-zinc-500";
   const label = EVENT_LABELS[event.event_type] || event.event_type;
 
@@ -69,7 +71,7 @@ function ActivityItem({ event, fc }: { event: AgentEvent; fc: ReturnType<typeof 
       <span className={`mt-1.5 h-1.5 w-1.5 rounded-full flex-shrink-0 ${dotColor}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <span className={`${fc.micro} text-zinc-500`}>{formatRelativeTime(event.timestamp)}</span>
+          <span className={`${fc.micro} text-zinc-500`}>{formatRelativeTime(event.timestamp, now)}</span>
           <span className={`${fc.micro} font-medium text-zinc-400`}>{label}</span>
           {event.tool_name && (
             <span className={`${fc.micro} text-blue-400 font-mono`}>{event.tool_name}</span>
@@ -85,6 +87,7 @@ function ActivityItem({ event, fc }: { event: AgentEvent; fc: ReturnType<typeof 
 
 // Session card
 function SessionCard({ session, fc }: { session: AgentSession; fc: ReturnType<typeof useMonitorSettings>["fontClasses"] }) {
+  const now = useNow();
   const isActive = session.status === "active";
   return (
     <div className={`rounded-lg border px-3 py-2.5 ${isActive ? "border-emerald-500/20 bg-emerald-950/5" : "border-zinc-800 bg-zinc-900/30"}`}>
@@ -99,7 +102,7 @@ function SessionCard({ session, fc }: { session: AgentSession; fc: ReturnType<ty
           </span>
         </div>
         <span className={`${fc.micro} text-zinc-600 font-mono flex-shrink-0`}>
-          {formatDuration(session.first_started, isActive ? null : session.last_activity)}
+          {formatDuration(session.first_started, isActive ? null : session.last_activity, now)}
         </span>
       </div>
       <div className={`mt-1.5 flex items-center gap-3 ${fc.micro}`}>
@@ -136,6 +139,7 @@ export function AgentMonitorPanel() {
     connected,
     fetchAgentEvents,
     refetchAll,
+    reset,
   } = useAgentMonitor();
 
   const { fontSize, setFontSize, fontClasses: fc, fontSizeOptions } = useMonitorSettings();
@@ -146,12 +150,20 @@ export function AgentMonitorPanel() {
   const [showFontMenu, setShowFontMenu] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleClearData = async () => {
     setClearing(true);
     try {
       const res = await fetch("/api/monitor/clear", { method: "DELETE" });
       if (res.ok) {
+        reset();
         refetchAll();
         setShowClearConfirm(false);
       }
@@ -162,16 +174,16 @@ export function AgentMonitorPanel() {
   const failedCount = agents.filter((a) => a.status === "failed").length;
   const completedCount = agents.filter((a) => a.status === "completed").length;
 
-  // Filter agents
-  const filteredAgents = (() => {
+  // Filter agents — memoized with debounced search
+  const filteredAgents = useMemo(() => {
     let list = agents;
     if (agentFilter === "working") list = workingAgents;
     else if (agentFilter === "idle") list = idleAgents;
     else if (agentFilter === "completed") list = list.filter((a) => a.status === "completed");
     else if (agentFilter === "failed") list = list.filter((a) => a.status === "failed");
 
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
       list = list.filter(
         (a) =>
           a.type.toLowerCase().includes(q) ||
@@ -181,7 +193,7 @@ export function AgentMonitorPanel() {
       );
     }
     return list;
-  })();
+  }, [agents, workingAgents, idleAgents, agentFilter, debouncedSearch]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
@@ -392,7 +404,7 @@ export function AgentMonitorPanel() {
                 <AgentCard
                   key={agent.id}
                   agent={agent}
-                  events={events.get(agent.id) || []}
+                  events={(events.get(agent.id) || []).slice(0, 200)}
                   onExpandEvents={fetchAgentEvents}
                   fontSize={fontSize}
                 />

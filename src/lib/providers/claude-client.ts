@@ -25,12 +25,27 @@ interface UsageBucket {
   resets_at?: string | null;
 }
 
+// Modern per-limit entries. Per-model usage (e.g. Fable) only appears here,
+// as weekly_scoped entries with scope.model — the seven_day_<model> buckets
+// are null on current plans.
+interface UsageLimit {
+  kind?: string; // "session" | "weekly_all" | "weekly_scoped" | ...
+  group?: string; // "session" | "weekly"
+  percent?: number; // 0-100
+  resets_at?: string | null;
+  scope?: {
+    model?: { id?: string | null; display_name?: string | null } | null;
+    surface?: string | null;
+  } | null;
+}
+
 interface UsageResponse {
   five_hour?: UsageBucket;
   seven_day?: UsageBucket;
-  seven_day_opus?: UsageBucket;
-  seven_day_sonnet?: UsageBucket;
+  seven_day_opus?: UsageBucket | null;
+  seven_day_sonnet?: UsageBucket | null;
   seven_day_oauth_apps?: UsageBucket | null;
+  limits?: UsageLimit[] | null;
   // Legacy field names (kept for backwards compat)
   session_usage_percent?: number;
   weekly_usage_percent?: number;
@@ -176,33 +191,53 @@ export class ClaudeClient {
         ? sevenDayUtil
         : (usage.weekly_usage_percent ?? 0) * 100;
 
-    // Per-model breakdown from seven_day_* buckets
+    // Per-model breakdown from scoped limits entries (e.g. Fable, Opus).
+    // The scoped percent shares the weekly window, so it renders alongside
+    // the 7-day bar the same way the old seven_day_* buckets did.
     const modelBreakdown: ClaudeUsageData["modelBreakdown"] = [];
 
-    if (usage.seven_day_opus?.utilization != null) {
-      const opusUtil = usage.seven_day_opus.utilization;
-      modelBreakdown.push({
-        modelId: "opus",
-        modelName: "Opus",
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        utilization: opusUtil,
-        level: getUsageLevel(opusUtil),
-      });
+    for (const limit of usage.limits ?? []) {
+      const modelName = limit.scope?.model?.display_name;
+      if (modelName && limit.percent != null) {
+        modelBreakdown.push({
+          modelId: modelName.toLowerCase(),
+          modelName,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          utilization: limit.percent,
+          level: getUsageLevel(limit.percent),
+        });
+      }
     }
 
-    if (usage.seven_day_sonnet?.utilization != null) {
-      const sonnetUtil = usage.seven_day_sonnet.utilization;
-      modelBreakdown.push({
-        modelId: "sonnet",
-        modelName: "Sonnet",
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        utilization: sonnetUtil,
-        level: getUsageLevel(sonnetUtil),
-      });
+    // Legacy seven_day_* buckets (null on current plans)
+    if (modelBreakdown.length === 0) {
+      if (usage.seven_day_opus?.utilization != null) {
+        const opusUtil = usage.seven_day_opus.utilization;
+        modelBreakdown.push({
+          modelId: "opus",
+          modelName: "Opus",
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          utilization: opusUtil,
+          level: getUsageLevel(opusUtil),
+        });
+      }
+
+      if (usage.seven_day_sonnet?.utilization != null) {
+        const sonnetUtil = usage.seven_day_sonnet.utilization;
+        modelBreakdown.push({
+          modelId: "sonnet",
+          modelName: "Sonnet",
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          utilization: sonnetUtil,
+          level: getUsageLevel(sonnetUtil),
+        });
+      }
     }
 
     return {

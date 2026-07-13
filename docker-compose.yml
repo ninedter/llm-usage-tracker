@@ -1,0 +1,21 @@
+services:
+  tracker:
+    build: .
+    image: llm-usage-tracker
+    container_name: llm-usage-tracker
+    restart: unless-stopped
+    ports:
+      - "3789:3000"
+    environment:
+      # Match the host timezone — SQLite 'localtime' day bucketing must agree
+      # with the user's calendar or sessions land on the wrong day
+      TZ: Asia/Phnom_Penh
+    # Provides ENCRYPTION_KEY — the standalone server doesn't load dotenv files,
+    # and without a stable key the stored credentials can't be decrypted
+    env_file:
+      - .env.local
+    volumes:
+      # SQLite DB + encrypted credentials (seed credentials.enc.json here once)
+      - ./.docker-data:/data
+      # Codex CLI login, read-only — tokens stay managed by `codex` on the host
+      - ~/.codex:/codex:ro

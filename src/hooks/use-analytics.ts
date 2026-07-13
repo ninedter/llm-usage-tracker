@@ -10,6 +10,7 @@ import type {
   ToolAnalytics,
   FileAnalytics,
   ModelAnalytics,
+  UsageInsights,
 } from "@/types";
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -87,6 +88,10 @@ export function useAnalytics() {
     `/api/analytics/models?${params}`, fetcher, swrOpts
   );
 
+  const { data: insights, isLoading: insightsLoading } = useSWR<UsageInsights>(
+    `/api/analytics/insights?${params}`, fetcher, swrOpts
+  );
+
   return {
     preset,
     timeRange,
@@ -98,12 +103,14 @@ export function useAnalytics() {
     toolAnalytics: toolAnalytics || null,
     fileAnalytics: fileAnalytics || null,
     modelAnalytics: modelAnalytics || null,
+    insights: insights || null,
     overviewLoading,
     trendsLoading,
     sessionsLoading,
     toolsLoading,
     filesLoading,
     modelsLoading,
+    insightsLoading,
     sessionSort,
     setSessionSort,
     sessionPage,

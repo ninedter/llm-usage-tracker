@@ -23,27 +23,38 @@ set -uo pipefail
 PAYLOAD=$(cat)
 
 # --- Determine the monitor base URL ---
+DOCKER_MONITOR_PORT="${DOCKER_MONITOR_PORT:-3789}"
+
 if [ -n "${MONITOR_URL:-}" ]; then
-  BASE_URL="${MONITOR_URL}/api/monitor"
+  # Explicit override — single target
+  BASE_URLS="${MONITOR_URL}/api/monitor"
+  # Quick connectivity check — bail silently if monitor is down
+  curl -s --head --connect-timeout 1 --max-time 2 "${MONITOR_URL}/api/health" >/dev/null 2>&1 || exit 0
 else
   MONITOR_HOST="127.0.0.1"
 
-  # Auto-detect port from the Electron app's port file
+  # Candidate ports: the Electron app's port file plus the Docker container's
+  # published port. Post to EVERY listening instance — otherwise whichever
+  # instance is open steals the events and the other's history has gaps.
+  CANDIDATE_PORTS=""
   PORT_FILE="$HOME/Library/Application Support/llm-usage-tracker/server-port"
   if [ -f "$PORT_FILE" ]; then
-    MONITOR_PORT=$(cat "$PORT_FILE")
-  else
-    MONITOR_PORT=3000
+    CANDIDATE_PORTS="$(cat "$PORT_FILE")"
   fi
+  CANDIDATE_PORTS="$CANDIDATE_PORTS $DOCKER_MONITOR_PORT 3000"
 
-  BASE_URL="http://${MONITOR_HOST}:${MONITOR_PORT}/api/monitor"
-fi
+  BASE_URLS=""
+  SEEN_PORTS=" "
+  for p in $CANDIDATE_PORTS; do
+    case "$SEEN_PORTS" in *" $p "*) continue ;; esac
+    SEEN_PORTS="$SEEN_PORTS$p "
+    if nc -z "$MONITOR_HOST" "$p" 2>/dev/null; then
+      BASE_URLS="$BASE_URLS http://${MONITOR_HOST}:${p}/api/monitor"
+    fi
+  done
 
-# Quick connectivity check — bail silently if monitor is down
-if [ -n "${MONITOR_URL:-}" ]; then
-  curl -s --head --connect-timeout 1 --max-time 2 "${BASE_URL}/../health" >/dev/null 2>&1 || exit 0
-else
-  nc -z "${MONITOR_HOST:-127.0.0.1}" "${MONITOR_PORT:-3000}" 2>/dev/null || exit 0
+  # Bail silently if no monitor is listening
+  [ -n "$BASE_URLS" ] || exit 0
 fi
 
 # --- Parse the payload once via python3, emit a JSON body to POST ---
@@ -101,9 +112,8 @@ elif hook_type == 'PostToolUse':
 
 elif hook_type == 'Stop':
     event_type = 'stop'
-    summary = 'Agent stopped — waiting for user input'
-    # Stop reason may appear in tool_result or a dedicated field
     stop_reason = d.get('stop_reason', '')
+    summary = f'Agent stopped — {stop_reason}' if stop_reason else 'Agent stopped — waiting for user input'
     content = str(stop_reason)[:2000] if stop_reason else ''
 
 elif hook_type == 'SubagentStop':
@@ -169,10 +179,12 @@ body = {
 print(json.dumps(body))
 " 2>/dev/null) || exit 0
 
-# --- POST to the monitor API ---
-curl -s -X POST "${BASE_URL}/events" \
-  -H "Content-Type: application/json" \
-  -d "$POST_BODY" \
-  --connect-timeout 2 --max-time 5 >/dev/null 2>&1 || true
+# --- POST to every listening monitor instance ---
+for BASE_URL in $BASE_URLS; do
+  curl -s -X POST "${BASE_URL}/events" \
+    -H "Content-Type: application/json" \
+    -d "$POST_BODY" \
+    --connect-timeout 2 --max-time 5 >/dev/null 2>&1 || true
+done
 
 exit 0

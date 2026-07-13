@@ -33,13 +33,15 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
   const { models, trend } = data;
   const totalCost = models.reduce((s, m) => s + m.cost, 0);
 
+  const segments: Array<
+    ModelAnalytics["models"][number] & { pct: number; color: string; offset: number }
+  > = [];
   let offset = 25;
-  const segments = models.map((m, i) => {
+  for (const [i, m] of models.entries()) {
     const pct = totalCost > 0 ? (m.cost / totalCost) * 100 : 0;
-    const seg = { ...m, pct, color: MODEL_COLORS[i % MODEL_COLORS.length], offset };
+    segments.push({ ...m, pct, color: MODEL_COLORS[i % MODEL_COLORS.length], offset });
     offset -= pct;
-    return seg;
-  });
+  }
 
   const trendDates = [...new Set(trend.map((t) => t.date))].sort();
   const trendModels = [...new Set(trend.map((t) => t.model))];

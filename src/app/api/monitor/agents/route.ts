@@ -48,7 +48,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Ag
     const session_id = url.searchParams.get("session_id") || undefined;
     const status = url.searchParams.get("status") || undefined;
     const type = url.searchParams.get("type") || undefined;
-    const limit = parseInt(url.searchParams.get("limit") || "100");
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "100"), 500);
     const offset = parseInt(url.searchParams.get("offset") || "0");
 
     const agents = listAgents({ session_id, status, type, limit, offset });

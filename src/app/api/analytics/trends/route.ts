@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAnalyticsTrends, rollupDailyUsage } from "@/lib/db";
+import { getAnalyticsTrends, rollupDailyUsageRange } from "@/lib/db";
 import type { ApiResponse, TrendPoint } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Tr
     const range = to - from;
     const granularity = range <= 2 * 86400000 ? "hourly" : "daily";
 
-    rollupDailyUsage();
+    rollupDailyUsageRange(from, to);
 
     const data = getAnalyticsTrends(from, to, granularity);
     return NextResponse.json({ success: true, data });

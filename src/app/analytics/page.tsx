@@ -10,21 +10,22 @@ import { SessionsTable } from "@/components/analytics/SessionsTable";
 import { ToolsPanel } from "@/components/analytics/ToolsPanel";
 import { FilesPanel } from "@/components/analytics/FilesPanel";
 import { ModelsPanel } from "@/components/analytics/ModelsPanel";
+import { InsightsPanel } from "@/components/analytics/InsightsPanel";
 
-type DetailTab = "sessions" | "tools" | "files" | "models";
+type DetailTab = "insights" | "sessions" | "tools" | "files" | "models";
 
 export default function AnalyticsPage() {
   const {
     preset, setPreset, setCustomRange,
     overview, trends, sessions,
-    toolAnalytics, fileAnalytics, modelAnalytics,
+    toolAnalytics, fileAnalytics, modelAnalytics, insights,
     overviewLoading, trendsLoading, sessionsLoading,
-    toolsLoading, filesLoading, modelsLoading,
+    toolsLoading, filesLoading, modelsLoading, insightsLoading,
     sessionSort, setSessionSort,
     sessionPage, setSessionPage,
   } = useAnalytics();
 
-  const [activeTab, setActiveTab] = useState<DetailTab>("sessions");
+  const [activeTab, setActiveTab] = useState<DetailTab>("insights");
 
   return (
     <div className="mx-auto flex w-full flex-1 flex-col px-4 pb-4">
@@ -62,7 +63,7 @@ export default function AnalyticsPage() {
       <div className="flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
         {/* Tabs */}
         <div className="flex border-b border-zinc-800 px-1">
-          {(["sessions", "tools", "files", "models"] as DetailTab[]).map((tab) => (
+          {(["insights", "sessions", "tools", "files", "models"] as DetailTab[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -79,6 +80,9 @@ export default function AnalyticsPage() {
 
         {/* Tab Content */}
         <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 380px)" }}>
+          {activeTab === "insights" && (
+            <InsightsPanel data={insights} loading={insightsLoading} />
+          )}
           {activeTab === "sessions" && (
             <SessionsTable
               data={sessions}

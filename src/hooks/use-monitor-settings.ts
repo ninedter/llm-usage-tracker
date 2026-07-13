@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 export type MonitorFontSize = "xs" | "sm" | "md" | "lg";
 
@@ -63,30 +63,50 @@ export const FONT_CLASSES: Record<MonitorFontSize, {
   },
 };
 
-export function useMonitorSettings() {
-  const [fontSize, setFontSizeState] = useState<MonitorFontSize>(DEFAULT_SIZE);
-  const [mounted, setMounted] = useState(false);
+// localStorage is the source of truth, exposed to React as an external store.
+// The custom event keeps every useMonitorSettings() instance in this window in
+// sync; the native "storage" event covers changes from other windows/tabs.
+const FONT_SIZE_CHANGE_EVENT = "monitor-font-size-change";
 
-  // Load from localStorage on mount
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored && stored in FONT_CLASSES) {
-        setFontSizeState(stored as MonitorFontSize);
-      }
-    } catch {
-      // localStorage not available
+function subscribeToFontSize(onStoreChange: () => void) {
+  window.addEventListener(FONT_SIZE_CHANGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStoreChange);
+  return () => {
+    window.removeEventListener(FONT_SIZE_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStoreChange);
+  };
+}
+
+function getFontSizeSnapshot(): MonitorFontSize {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored && stored in FONT_CLASSES) {
+      return stored as MonitorFontSize;
     }
-    setMounted(true);
-  }, []);
+  } catch {
+    // localStorage not available
+  }
+  return DEFAULT_SIZE;
+}
+
+function getServerFontSizeSnapshot(): MonitorFontSize {
+  return DEFAULT_SIZE;
+}
+
+export function useMonitorSettings() {
+  const fontSize = useSyncExternalStore(
+    subscribeToFontSize,
+    getFontSizeSnapshot,
+    getServerFontSizeSnapshot
+  );
 
   const setFontSize = useCallback((size: MonitorFontSize) => {
-    setFontSizeState(size);
     try {
       localStorage.setItem(STORAGE_KEY, size);
     } catch {
       // localStorage not available
     }
+    window.dispatchEvent(new Event(FONT_SIZE_CHANGE_EVENT));
   }, []);
 
   const fontClasses = FONT_CLASSES[fontSize];
@@ -95,7 +115,6 @@ export function useMonitorSettings() {
     fontSize,
     setFontSize,
     fontClasses,
-    mounted,
     fontSizeOptions: (Object.keys(FONT_SIZE_LABELS) as MonitorFontSize[]).map((key) => ({
       value: key,
       label: FONT_SIZE_LABELS[key],
