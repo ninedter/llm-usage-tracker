@@ -100,6 +100,12 @@ export function getDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_daily_usage_date ON daily_usage(date);
     CREATE INDEX IF NOT EXISTS idx_daily_usage_project ON daily_usage(project);
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
 
   // Forward-compatible migrations: add columns if they don't exist
@@ -419,6 +425,21 @@ export function getMonitorStats(): MonitorStats {
     events_today: eventsToday.total,
     total_cost: cost,
   };
+}
+
+// --- App settings (key-value) ---
+
+export function getSetting(key: string): string | null {
+  const row = getDb().prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  getDb().prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, value, Date.now());
 }
 
 // --- Cleanup ---
