@@ -58,3 +58,6 @@ AGENTS.md
 
 # local dev sqlite db
 /.data/
+
+# subagent-driven-development scratch (briefs, reports, ledger, diffs)
+/.superpowers/
