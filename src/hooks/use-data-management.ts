@@ -42,18 +42,28 @@ export function useDataManagement() {
   }, [storage]);
 
   const setRetention = useCallback(async (patch: { enabled?: boolean; days?: number }) => {
-    const res = await fetch("/api/monitor/retention", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    const json: ApiResponse<RetentionPolicy> = await res.json();
-    if (json.success) retention.mutate(json.data, { revalidate: false });
+    try {
+      const res = await fetch("/api/monitor/retention", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const json: ApiResponse<RetentionPolicy> = await res.json();
+      if (json.success) {
+        retention.mutate(json.data, { revalidate: false });
+      } else {
+        await retention.mutate(); // re-sync from server on failure
+      }
+    } catch {
+      await retention.mutate(); // revert optimistic UI on network error
+    }
   }, [retention]);
 
   return {
     storage: storage.data,
+    storageError: storage.error,
     retention: retention.data,
+    retentionError: retention.error,
     busy,
     preview,
     purge,

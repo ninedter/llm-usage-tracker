@@ -26,7 +26,7 @@ function formatDay(ms: number | null): string {
 }
 
 export function DataManagement() {
-  const { storage, retention, busy, preview, purge, setRetention } = useDataManagement();
+  const { storage, storageError, retention, busy, preview, purge, setRetention } = useDataManagement();
 
   const [windowValue, setWindowValue] = useState<PurgeWindow>(30);
   const [counts, setCounts] = useState<PurgeCounts | null>(null);
@@ -66,7 +66,7 @@ export function DataManagement() {
     <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
       <h3 className="mb-1 text-sm font-semibold text-zinc-800 dark:text-zinc-200">Data Management</h3>
       <p className="mb-4 text-xs text-zinc-500 dark:text-zinc-400">
-        Purge old monitor data to keep the local database small. Trend summaries are kept unless you purge everything.
+        Purge old monitor data to reclaim database space. Purged periods drop out of activity analytics; daily cost/token summaries are retained — Everything also clears those.
       </p>
 
       {/* Storage summary */}
@@ -78,6 +78,8 @@ export function DataManagement() {
             <span>{storage.counts.agent_events.toLocaleString()} events</span>
             <span>{formatDay(storage.oldest_ms)} – {formatDay(storage.newest_ms)}</span>
           </div>
+        ) : storageError ? (
+          <div className="text-xs text-red-500">Failed to load storage info.</div>
         ) : (
           <div className="text-xs text-zinc-400">Loading storage…</div>
         )}
@@ -85,9 +87,10 @@ export function DataManagement() {
 
       {/* Manual purge */}
       <div className="mb-5 flex flex-col gap-2">
-        <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Delete data older than</label>
+        <label htmlFor="purge-window" className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Delete data older than</label>
         <div className="flex items-center gap-2">
           <select
+            id="purge-window"
             value={String(windowValue)}
             onChange={(e) => {
               const v = e.target.value;
@@ -95,6 +98,7 @@ export function DataManagement() {
               setResult(null);
               setCounts(null);
             }}
+            disabled={busy}
             className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
           >
             {WINDOWS.map((w) => (
@@ -121,7 +125,7 @@ export function DataManagement() {
                     {counts
                       ? `Removes ~${counts.sessions.toLocaleString()} sessions, ${counts.events.toLocaleString()} events.`
                       : "Calculating…"}{" "}
-                    {isEverything ? "Summaries are cleared too. " : "Trend summaries are kept. "}This cannot be undone.
+                    {isEverything ? "This deletes all monitor data, including daily summaries. " : "Deleted sessions and events drop out of analytics; daily cost/token summaries are kept. "}This cannot be undone.
                   </p>
                   <div className="flex items-center gap-2">
                     <button
