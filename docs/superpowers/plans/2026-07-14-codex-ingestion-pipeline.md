@@ -1,5 +1,20 @@
 # Codex Ingestion Pipeline Implementation Plan (Plan 1 of 2)
 
+> ⚠️ **STATUS: NOT BEING EXECUTED (superseded reference).** A parallel session
+> owns implementation on `feat/multi-provider-tracking`. The **schema layer
+> (Task 1) is already committed** (`80bf8a2`, `schema.test.ts` passing) with
+> different choices than this doc — reconcile to the **committed code**, not to
+> this doc, if you use it. Known divergences:
+> - Provider value is **`'anthropic'`** (a `DbProvider` type), not `'claude'`.
+> - Codex events reuse an extended **`createEvent(event, provider, sourceId)`**
+>   (INSERT-OR-IGNORE when `sourceId` is set), not a separate `insertCodexEvent`.
+> - **`agents` did not get a `provider` column.**
+> - Schema test lives in `schema.test.ts`, not `db-provider.test.ts`.
+>
+> Still genuinely useful here as design reference: **Tasks 2–4** (pure mapper,
+> idempotent ingest, polling watcher) and the **Codex rollout format reference**
+> — those modules did not exist as of this writing.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ingest Codex CLI rollout logs (`~/.codex/sessions/**/rollout-*.jsonl`) into the existing `sessions`/`agents`/`agent_events`/`token_usage` tables so OpenAI/Codex activity appears in the monitor and analytics, with a 90-day backfill plus near-real-time live tailing.
