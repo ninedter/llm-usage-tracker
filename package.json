@@ -17,8 +17,8 @@
     "electron:compile": "tsc -p electron/tsconfig.json",
     "electron:preview": "npm run build && npm run electron:compile && electron .",
     "electron:build": "npm run electron:clean && npm run build && npm run electron:compile && electron-builder",
-    "electron:clean": "rm -rf dist-electron .next/standalone/dist-electron",
-    "postbuild": "cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public"
+    "electron:clean": "rm -rf dist-electron .next",
+    "postbuild": "rm -rf .next/standalone/.next/static .next/standalone/public && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
@@ -53,13 +53,17 @@
     "files": [
       "electron/**/*.js",
       ".next/standalone/**/*",
-      ".next/static/**/*",
-      "public/**/*",
-      "node_modules/better-sqlite3/**/*",
-      "!.next/standalone/dist-electron",
-      "!.next/standalone/dist-electron/**/*",
-      "!dist-electron",
-      "!dist-electron/**/*"
+      "!.next/standalone/.data{,/**/*}",
+      "!.next/standalone/.env*",
+      "!.next/standalone/credentials.enc.json",
+      "!.next/standalone/dist-electron{,/**/*}",
+      "!.next/standalone/node_modules/typescript{,/**/*}",
+      "!.next/standalone/docs{,/**/*}",
+      "!.next/standalone/src{,/**/*}",
+      "!.next/standalone/*.md",
+      "!.next/standalone/package-lock.json",
+      "!.next/standalone/tsconfig.tsbuildinfo",
+      "!dist-electron{,/**/*}"
     ],
     "icon": "build/icon.png",
     "mac": {
