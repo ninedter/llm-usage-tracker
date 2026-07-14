@@ -55,3 +55,6 @@ AGENTS.md
 
 # docker runtime data
 /.docker-data/
+
+# local dev sqlite db
+/.data/
