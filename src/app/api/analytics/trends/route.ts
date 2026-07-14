@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAnalyticsTrends, rollupDailyUsageRange } from "@/lib/db";
+import { getAnalyticsTrends, maybeRollupRange } from "@/lib/db";
 import { readProvider } from "@/lib/provider-param";
 import type { ApiResponse, TrendPoint } from "@/types";
 
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Tr
     const range = to - from;
     const granularity = range <= 2 * 86400000 ? "hourly" : "daily";
 
-    rollupDailyUsageRange(from, to);
+    maybeRollupRange(from, to);
 
     const data = getAnalyticsTrends(from, to, granularity, provider);
     return NextResponse.json({ success: true, data });

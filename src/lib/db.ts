@@ -631,6 +631,24 @@ function rollupRangeChunked(from: number, to: number): void {
   }
 }
 
+// Analytics routes call this once per request; identical ranges within the
+// same minute collapse to one real rollup (the 60s cadence matches the SWR
+// refresh interval that generates them).
+const rollupSeen = new Map<string, number>();
+
+export function maybeRollupRange(from: number, to: number, nowMs = Date.now()): boolean {
+  const key = `${from}|${Math.floor(to / 60_000)}`;
+  const last = rollupSeen.get(key) ?? 0;
+  if (nowMs - last < 60_000) return false;
+  rollupSeen.set(key, nowMs);
+  if (rollupSeen.size > 256) {
+    // prune stale keys so a long-lived server doesn't accumulate ranges
+    for (const [k, ts] of rollupSeen) if (nowMs - ts > 3_600_000) rollupSeen.delete(k);
+  }
+  rollupRangeChunked(from, to);
+  return true;
+}
+
 // Age-based purge: summarize the deleted span into daily_usage (preserved),
 // delete raw rows before cutoffMs, optionally VACUUM to reclaim file space.
 export function purgeOlderThan(cutoffMs: number, opts?: { vacuum?: boolean }): import("@/types").PurgeResult {

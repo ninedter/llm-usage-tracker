@@ -9,7 +9,7 @@ beforeAll(() => {
 
 import {
   getDb, createSession, createAgent, createEvent, upsertTokenUsage,
-  getToolAnalytics, getSessionAnalytics,
+  getToolAnalytics, getSessionAnalytics, maybeRollupRange,
 } from "@/lib/db";
 
 const T0 = Date.parse("2026-07-01T10:00:00Z");
@@ -106,5 +106,15 @@ describe("avg duration pairing under parallel same-tool bursts", () => {
     expect(grep.call_count).toBe(2);
     // both results pair with the nearest call at T1+1000: (500 + 1000) / 2
     expect(grep.avg_duration_ms).toBe(750);
+  });
+});
+
+describe("maybeRollupRange throttle", () => {
+  it("dedupes identical ranges within 60s but allows new ranges", () => {
+    const t = Date.parse("2026-07-10T00:00:00Z");
+    expect(maybeRollupRange(t, t + 86400000, t + 86400000)).toBe(true);
+    expect(maybeRollupRange(t, t + 86400000 + 5_000, t + 86400000 + 5_000)).toBe(false); // same minute bucket
+    expect(maybeRollupRange(t, t + 86400000 + 61_000, t + 86400000 + 61_000)).toBe(true); // next minute
+    expect(maybeRollupRange(t - 86400000, t + 86400000, t + 86400000)).toBe(true); // different from
   });
 });
