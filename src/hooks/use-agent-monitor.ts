@@ -12,6 +12,8 @@ async function fetcher<T>(url: string): Promise<T> {
   return json.data as T;
 }
 
+const MAX_AGENT_EVENTS = 200;
+
 const STATUS_PRIORITY: Record<string, number> = {
   working: 0,
   idle: 1,
@@ -104,10 +106,11 @@ export function useAgentMonitor() {
           setEvents((prev) => {
             const next = new Map(prev);
             const existing = next.get(event.agent_id) || [];
-            // cap per-agent history: AgentCard renders at most 200 anyway,
-            // and an uncapped array is an unbounded memory leak on long runs
-            const appended = existing.length >= 200
-              ? [...existing.slice(existing.length - 199), event]
+            // cap per-agent history at newest 200 in chronological order,
+            // matching the fetch-hydration path. An uncapped array would be
+            // an unbounded memory leak on long runs.
+            const appended = existing.length >= MAX_AGENT_EVENTS
+              ? [...existing.slice(existing.length - (MAX_AGENT_EVENTS - 1)), event]
               : [...existing, event];
             next.set(event.agent_id, appended);
             return next;
@@ -156,7 +159,12 @@ export function useAgentMonitor() {
       const res = await fetch(`/api/monitor/events/${agentId}`);
       const json: ApiResponse<AgentEvent[]> = await res.json();
       if (json.success && json.data) {
-        setEvents((prev) => new Map(prev).set(agentId, json.data!));
+        // Keep the NEWEST 200 in chronological order — same rolling window the
+        // SSE insert path maintains. (The API returns ASC with a 500 default
+        // limit, so slice(-200) takes the newest tail. The pre-task UI sliced
+        // the OLDEST 200 at render time — a frozen view for live agents; the
+        // rolling window is the deliberate, coordinator-approved behavior.)
+        setEvents((prev) => new Map(prev).set(agentId, json.data!.slice(-MAX_AGENT_EVENTS)));
       }
     } catch {
       // ignore
