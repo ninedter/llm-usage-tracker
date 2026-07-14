@@ -9,7 +9,7 @@ services:
     environment:
       # Match the host timezone — SQLite 'localtime' day bucketing must agree
       # with the user's calendar or sessions land on the wrong day
-      TZ: Asia/Phnom_Penh
+      TZ: ${TZ:-Asia/Phnom_Penh}
     # Provides ENCRYPTION_KEY — the standalone server doesn't load dotenv files,
     # and without a stable key the stored credentials can't be decrypted
     env_file:
@@ -25,6 +25,12 @@ services:
       - llm-tracker-data:/data
       # Codex CLI login, read-only — tokens stay managed by `codex` on the host
       - ~/.codex:/codex:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
 volumes:
   llm-tracker-data:
