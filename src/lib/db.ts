@@ -449,14 +449,35 @@ export function completeSessionAgents(sessionId: string): void {
   getDb().prepare("UPDATE agents SET status = 'completed', ended_at = ? WHERE session_id = ? AND status IN ('working', 'idle')").run(now, sessionId);
 }
 
-export function deleteOldSessions(olderThanMs: number): number {
-  const cutoff = Date.now() - olderThanMs;
+// Delete every raw row tied to a session started before an absolute epoch-ms
+// cutoff. Runs in one transaction. Leaves daily_usage intact.
+export function deleteBefore(cutoffMs: number): import("@/types").PurgeCounts {
   const d = getDb();
-  d.prepare("DELETE FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoff);
-  d.prepare("DELETE FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoff);
-  d.prepare("DELETE FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoff);
-  const result = d.prepare("DELETE FROM sessions WHERE started_at < ?").run(cutoff);
-  return result.changes;
+  const run = d.transaction((): import("@/types").PurgeCounts => {
+    const events = d.prepare("DELETE FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const agents = d.prepare("DELETE FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const token_usage = d.prepare("DELETE FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const sessions = d.prepare("DELETE FROM sessions WHERE started_at < ?").run(cutoffMs).changes;
+    return { sessions, agents, events, token_usage };
+  });
+  return run();
+}
+
+// Back-compat wrapper: existing callers pass a duration, not an absolute time.
+export function deleteOldSessions(olderThanMs: number): number {
+  return deleteBefore(Date.now() - olderThanMs).sessions;
+}
+
+// Count what deleteBefore(cutoffMs) would remove — same predicate, no writes.
+export function previewPurge(cutoffMs: number): import("@/types").PurgeCounts {
+  const d = getDb();
+  const one = (sql: string) => (d.prepare(sql).get(cutoffMs) as { n: number }).n;
+  return {
+    sessions: one("SELECT COUNT(*) n FROM sessions WHERE started_at < ?"),
+    agents: one("SELECT COUNT(*) n FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
+    events: one("SELECT COUNT(*) n FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
+    token_usage: one("SELECT COUNT(*) n FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
+  };
 }
 
 // Clear all monitor data

@@ -58,3 +58,31 @@ describe("app_settings", () => {
     expect(db.getSetting("k")).toBe("2");
   });
 });
+
+describe("previewPurge / deleteBefore", () => {
+  it("counts and deletes only rows strictly before the cutoff, keeping the boundary row", () => {
+    const cutoff = 1_000_000;
+    seedSession("old", cutoff - 1);
+    seedAgent("ag-old", "old");
+    seedEvent("old", cutoff - 1);
+    seedTokenUsage("old"); // old token_usage row → should be deleted
+    seedSession("edge", cutoff); // exactly at cutoff → kept
+    seedAgent("ag-edge", "edge"); // agent on the boundary session → must be KEPT
+    seedEvent("edge", cutoff);
+    seedTokenUsage("edge"); // token_usage on the boundary session → must be KEPT
+    seedSession("new", cutoff + 1); // newer → kept
+    seedEvent("new", cutoff + 1);
+
+    expect(db.previewPurge(cutoff)).toEqual({ sessions: 1, agents: 1, events: 1, token_usage: 1 });
+
+    const deleted = db.deleteBefore(cutoff);
+    expect(deleted).toEqual({ sessions: 1, agents: 1, events: 1, token_usage: 1 });
+
+    // preview is now empty and boundary + newer rows survive
+    expect(db.previewPurge(cutoff)).toEqual({ sessions: 0, agents: 0, events: 0, token_usage: 0 });
+    const d = db.getDb();
+    expect((d.prepare("SELECT COUNT(*) n FROM sessions").get() as { n: number }).n).toBe(2);
+    expect((d.prepare("SELECT COUNT(*) n FROM agents").get() as { n: number }).n).toBe(1);
+    expect((d.prepare("SELECT COUNT(*) n FROM token_usage").get() as { n: number }).n).toBe(1);
+  });
+});
