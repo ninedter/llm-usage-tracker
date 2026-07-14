@@ -15,10 +15,9 @@ export async function GET(): Promise<Response> {
       controller.enqueue(encoder.encode("event: connected\ndata: {}\n\n"));
 
       // Subscribe to broadcast events
-      const unsubscribe = addListener((event) => {
+      const unsubscribe = addListener((frame) => {
         try {
-          const data = JSON.stringify(event);
-          controller.enqueue(encoder.encode(`event: message\ndata: ${data}\n\n`));
+          controller.enqueue(frame);
         } catch {
           // controller may be closed
         }

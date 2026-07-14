@@ -14,14 +14,17 @@ type WsEvent = {
   data: unknown;
 };
 
-type Listener = (event: WsEvent) => void;
+type Listener = (frame: Uint8Array) => void;
 
 const listeners = new Set<Listener>();
+const encoder = new TextEncoder();
 
 export function broadcastEvent(event: WsEvent): void {
+  if (listeners.size === 0) return; // nobody connected — skip the stringify entirely
+  const frame = encoder.encode(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
   for (const listener of listeners) {
     try {
-      listener(event);
+      listener(frame);
     } catch {
       // ignore listener errors
     }
