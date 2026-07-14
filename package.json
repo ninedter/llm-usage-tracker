@@ -10,6 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "electron:dev": "tsc -p electron/tsconfig.json && concurrently --kill-others \"next dev -p 3123\" \"wait-on http://127.0.0.1:3123 && NODE_ENV=development ELECTRON_DEV_PORT=3123 electron .\"",
     "electron:compile": "tsc -p electron/tsconfig.json",
     "electron:preview": "npm run build && npm run electron:compile && electron .",
@@ -38,6 +40,7 @@
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
     "typescript": "^5",
+    "vitest": "^2.1.9",
     "wait-on": "^8.0.3"
   },
   "build": {
@@ -64,11 +67,15 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.utilities",
