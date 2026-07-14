@@ -392,6 +392,7 @@ export function listEvents(agentId: string, filters?: {
   event_type?: string;
   limit?: number;
   offset?: number;
+  order?: "asc" | "desc";
 }): AgentEvent[] {
   const clauses: string[] = ["agent_id = ?"];
   const values: unknown[] = [agentId];
@@ -400,9 +401,10 @@ export function listEvents(agentId: string, filters?: {
 
   const limit = filters?.limit ?? 500;
   const offset = filters?.offset ?? 0;
+  const order = filters?.order === "desc" ? "DESC" : "ASC";
 
   return getDb().prepare(
-    `SELECT * FROM agent_events WHERE ${clauses.join(" AND ")} ORDER BY timestamp ASC LIMIT ? OFFSET ?`
+    `SELECT * FROM agent_events WHERE ${clauses.join(" AND ")} ORDER BY timestamp ${order} LIMIT ? OFFSET ?`
   ).all(...values, limit, offset) as AgentEvent[];
 }
 

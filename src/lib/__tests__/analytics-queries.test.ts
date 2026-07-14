@@ -9,7 +9,7 @@ beforeAll(() => {
 
 import {
   getDb, createSession, createAgent, createEvent, upsertTokenUsage,
-  getToolAnalytics, getSessionAnalytics, maybeRollupRange,
+  getToolAnalytics, getSessionAnalytics, maybeRollupRange, listEvents,
 } from "@/lib/db";
 
 const T0 = Date.parse("2026-07-01T10:00:00Z");
@@ -139,5 +139,17 @@ describe("maybeRollupRange throttle", () => {
     // re-rolling it succeeds immediately (returns true) even though its
     // insert was 30s ago in wall-clock terms.
     expect(maybeRollupRange(t + 0, t + 86400000 + 0, t + 86400000 + 30_000)).toBe(true);
+  });
+});
+
+describe("listEvents ordering", () => {
+  it("returns newest-first with order=desc and honours limit", () => {
+    const desc = listEvents("a1", { order: "desc", limit: 3 });
+    expect(desc).toHaveLength(3);
+    expect(desc[0].timestamp).toBeGreaterThanOrEqual(desc[1].timestamp);
+    expect(desc[1].timestamp).toBeGreaterThanOrEqual(desc[2].timestamp);
+    // desc+limit must select the NEWEST rows, not the oldest
+    const asc = listEvents("a1", { limit: 500 });
+    expect(desc[0].timestamp).toBe(asc[asc.length - 1].timestamp);
   });
 });

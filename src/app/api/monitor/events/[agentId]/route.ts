@@ -13,8 +13,9 @@ export async function GET(
     const event_type = url.searchParams.get("event_type") || undefined;
     const limit = parseInt(url.searchParams.get("limit") || "500");
     const offset = parseInt(url.searchParams.get("offset") || "0");
+    const order = (url.searchParams.get("order") === "desc" ? "desc" : "asc") as "asc" | "desc";
 
-    const events = listEvents(agentId, { event_type, limit, offset });
+    const events = listEvents(agentId, { event_type, limit, offset, order });
     return NextResponse.json({ success: true, data: events });
   } catch (error) {
     return NextResponse.json(

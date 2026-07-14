@@ -156,15 +156,14 @@ export function useAgentMonitor() {
   // Fetch events for a specific agent
   const fetchAgentEvents = useCallback(async (agentId: string) => {
     try {
-      const res = await fetch(`/api/monitor/events/${agentId}`);
+      const res = await fetch(`/api/monitor/events/${agentId}?limit=${MAX_AGENT_EVENTS}&order=desc`);
       const json: ApiResponse<AgentEvent[]> = await res.json();
       if (json.success && json.data) {
-        // Keep the NEWEST 200 in chronological order — same rolling window the
-        // SSE insert path maintains. (The API returns ASC with a 500 default
-        // limit, so slice(-200) takes the newest tail. The pre-task UI sliced
-        // the OLDEST 200 at render time — a frozen view for live agents; the
-        // rolling window is the deliberate, coordinator-approved behavior.)
-        setEvents((prev) => new Map(prev).set(agentId, json.data!.slice(-MAX_AGENT_EVENTS)));
+        // Server returns the newest N events in DESC order (newest first).
+        // Reverse to restore chronological ASC order, matching what SSE
+        // maintains in memory: every consumer expects events in timestamp
+        // ascending order (oldest to newest for a timeline).
+        setEvents((prev) => new Map(prev).set(agentId, json.data!.slice().reverse()));
       }
     } catch {
       // ignore
