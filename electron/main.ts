@@ -30,6 +30,19 @@ const APP_NAME = "LLM Usage Tracker";
 // (with its own userData DB) exists only as a fallback for when Docker is down.
 const DOCKER_PORT = parseInt(process.env.DOCKER_MONITOR_PORT || "3789", 10);
 
+// Inline splash shown while the server decision happens. Matches the app's
+// dark zinc palette so the handoff to the real UI doesn't flash.
+const SPLASH_URL =
+  "data:text/html;charset=utf-8," +
+  encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><style>
+  html,body{height:100%;margin:0;background:#09090b;color:#a1a1aa;
+  font:14px -apple-system,BlinkMacSystemFont,sans-serif;display:flex;
+  align-items:center;justify-content:center;-webkit-user-select:none}
+  .wrap{text-align:center}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:#f59e0b;margin-right:8px;animation:p 1.2s ease-in-out infinite}
+  @keyframes p{0%,100%{opacity:.25}50%{opacity:1}}
+  </style></head><body><div class="wrap"><span class="dot"></span>Starting LLM Usage Tracker…</div></body></html>`);
+
 type ServerMode = "docker" | "embedded" | "dev";
 
 let mainWindow: BrowserWindow | null = null;
@@ -63,7 +76,7 @@ function getFreePort(): Promise<number> {
   });
 }
 
-/** Wait until the server responds on /api/health */
+/** Wait until the server responds on /api/live */
 async function waitForServer(
   port: number,
   timeoutMs = 30_000
@@ -71,12 +84,12 @@ async function waitForServer(
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/health`);
+      const res = await fetch(`http://127.0.0.1:${port}/api/live`);
       if (res.ok) return;
     } catch {
       // server not ready yet
     }
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error(`Server did not start within ${timeoutMs}ms`);
 }
@@ -108,7 +121,7 @@ async function dockerServerHealthy(): Promise<boolean> {
     try {
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), timeouts[attempt]);
-      const res = await fetch(`http://127.0.0.1:${DOCKER_PORT}/api/health`, {
+      const res = await fetch(`http://127.0.0.1:${DOCKER_PORT}/api/live`, {
         signal: ctl.signal,
       });
       clearTimeout(timer);
@@ -131,7 +144,13 @@ async function dockerServerHealthy(): Promise<boolean> {
  * rebuild-per-runtime dance that kept breaking either the app or the tests.
  */
 function findSystemNode(): string | null {
-  const candidates: string[] = [];
+  // Well-known locations first — a login zsh (-l) sources the full user
+  // profile (nvm/asdf/etc.) and can take seconds; only fall back to it when
+  // none of the standard paths exist.
+  const candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
   try {
     const probe =
       process.platform === "win32"
@@ -141,13 +160,9 @@ function findSystemNode(): string | null {
             timeout: 5000,
           });
     const found = probe.split("\n")[0].trim();
-    if (found) candidates.push(found);
+    if (found && existsSync(found)) return found;
   } catch {
-    // no login-shell node; fall through to well-known paths
-  }
-  candidates.push("/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node");
-  for (const c of candidates) {
-    if (c && existsSync(c)) return c;
+    // no node anywhere
   }
   return null;
 }
@@ -295,7 +310,7 @@ function killServer(): void {
 
 // ── Window ───────────────────────────────────────────────────────────────────
 
-function createWindow(): void {
+function createWindow(initialUrl: string): void {
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 750,
@@ -313,14 +328,18 @@ function createWindow(): void {
     },
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
+  mainWindow.loadURL(initialUrl);
 
   // If the Docker tracker goes away mid-session (container stopped), fall back
   // to the embedded server once instead of leaving a dead window. Fires on the
   // next navigation/reload against the unreachable origin.
   mainWindow.webContents.on(
     "did-fail-load",
-    async (_event, errorCode, errorDescription, _url, isMainFrame) => {
+    async (_event, errorCode, errorDescription, url, isMainFrame) => {
+      // The inline data: splash is loaded via loadURL too, so a failed
+      // non-http(s) navigation (splash, about:, chrome-error:, ...) must
+      // never be mistaken for the docker origin going unreachable.
+      if (!url.startsWith("http")) return;
       if (!isMainFrame || errorCode === -3 /* ERR_ABORTED: benign */) return;
       if (serverMode !== "docker" || dockerFallbackTried) return;
       dockerFallbackTried = true;
@@ -440,6 +459,13 @@ if (!gotLock) {
       );
     }
 
+    // Show the window immediately with an inline splash — the Docker probe
+    // and (worst case) an embedded-server boot happen behind it, not before
+    // it. The user sees a window in milliseconds instead of waiting on
+    // network I/O.
+    createWindow(SPLASH_URL);
+    createTray(mainWindow!, APP_NAME);
+
     try {
       if (!IS_DEV && (await dockerServerHealthy())) {
         // Thin-client mode: attach to the always-on Docker tracker. One
@@ -476,8 +502,7 @@ if (!gotLock) {
       return;
     }
 
-    createWindow();
-    createTray(mainWindow!, APP_NAME);
+    mainWindow?.loadURL(`http://127.0.0.1:${serverPort}`);
   });
 
   app.on("window-all-closed", () => {
@@ -491,7 +516,7 @@ if (!gotLock) {
     if (mainWindow) {
       mainWindow.show();
     } else {
-      createWindow();
+      createWindow(`http://127.0.0.1:${serverPort}`);
     }
   });
 
