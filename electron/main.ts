@@ -95,19 +95,31 @@ function portFilePath(): string {
   return join(ensureDataDir(), "server-port");
 }
 
-/** Is the Docker tracker up and serving? Short timeout — this gates startup. */
-async function dockerServerHealthy(timeoutMs = 1500): Promise<boolean> {
-  try {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), timeoutMs);
-    const res = await fetch(`http://127.0.0.1:${DOCKER_PORT}/api/health`, {
-      signal: ctl.signal,
-    });
-    clearTimeout(timer);
-    return res.ok;
-  } catch {
-    return false;
+/**
+ * Is the Docker tracker up and serving? This gates which mode the app starts
+ * in, so it must not flake: a cold Electron launch on a busy machine can make
+ * a single short-timeout attempt fail even though the container is fine
+ * (observed in practice). Three attempts with growing timeouts, and every
+ * failure is logged so a wrong mode decision is never silent.
+ */
+async function dockerServerHealthy(): Promise<boolean> {
+  const timeouts = [1500, 3000, 3000];
+  for (let attempt = 0; attempt < timeouts.length; attempt++) {
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), timeouts[attempt]);
+      const res = await fetch(`http://127.0.0.1:${DOCKER_PORT}/api/health`, {
+        signal: ctl.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) return true;
+      console.warn(`[main] Docker probe attempt ${attempt + 1}: HTTP ${res.status}`);
+    } catch (err) {
+      const cause = (err as { cause?: { code?: string } })?.cause?.code ?? (err as Error)?.message;
+      console.warn(`[main] Docker probe attempt ${attempt + 1} failed: ${cause}`);
+    }
   }
+  return false;
 }
 
 /**
