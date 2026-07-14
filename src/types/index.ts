@@ -336,3 +336,38 @@ export interface UsageInsights {
   projects: ProjectUsage[];
   stats: UsageInsightStats;
 }
+
+// --- Data Management / Purge ---
+
+export interface StorageInfo {
+  db_bytes: number;
+  wal_bytes: number;
+  counts: {
+    sessions: number;
+    agents: number;
+    agent_events: number;
+    token_usage: number;
+    daily_usage: number;
+  };
+  oldest_ms: number | null;
+  newest_ms: number | null;
+}
+
+export interface PurgeCounts {
+  sessions: number;
+  agents: number;
+  events: number;
+  token_usage: number;
+}
+
+export interface PurgeResult {
+  deleted: PurgeCounts;
+  bytes_freed: number;
+  daily_usage_cleared?: number; // set only by a full "Everything" wipe
+}
+
+export interface RetentionPolicy {
+  enabled: boolean;
+  days: number;
+  last_purge_at: number | null;
+}

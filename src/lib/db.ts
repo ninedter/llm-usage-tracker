@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { join } from "path";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, statSync } from "fs";
 import type { AgentRecord, AgentEvent, AgentSession, SessionRecord, TokenUsage, MonitorStats, DbProvider, CodexIngestRow } from "@/types";
 
 let db: Database.Database | null = null;
@@ -112,6 +112,12 @@ export function getDb(): Database.Database {
       thread_id     TEXT,
       last_seen_at  INTEGER NOT NULL,
       status        TEXT NOT NULL DEFAULT 'active'
+    );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     );
   `);
 
@@ -481,6 +487,21 @@ export function getMonitorStats(): MonitorStats {
   };
 }
 
+// --- App settings (key-value) ---
+
+export function getSetting(key: string): string | null {
+  const row = getDb().prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  getDb().prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, value, Date.now());
+}
+
 // --- Cleanup ---
 
 export function completeSessionAgents(sessionId: string): void {
@@ -488,14 +509,35 @@ export function completeSessionAgents(sessionId: string): void {
   getDb().prepare("UPDATE agents SET status = 'completed', ended_at = ? WHERE session_id = ? AND status IN ('working', 'idle')").run(now, sessionId);
 }
 
-export function deleteOldSessions(olderThanMs: number): number {
-  const cutoff = Date.now() - olderThanMs;
+// Delete every raw row tied to a session started before an absolute epoch-ms
+// cutoff. Runs in one transaction. Leaves daily_usage intact.
+export function deleteBefore(cutoffMs: number): import("@/types").PurgeCounts {
   const d = getDb();
-  d.prepare("DELETE FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoff);
-  d.prepare("DELETE FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoff);
-  d.prepare("DELETE FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoff);
-  const result = d.prepare("DELETE FROM sessions WHERE started_at < ?").run(cutoff);
-  return result.changes;
+  const run = d.transaction((): import("@/types").PurgeCounts => {
+    const events = d.prepare("DELETE FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const agents = d.prepare("DELETE FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const token_usage = d.prepare("DELETE FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const sessions = d.prepare("DELETE FROM sessions WHERE started_at < ?").run(cutoffMs).changes;
+    return { sessions, agents, events, token_usage };
+  });
+  return run();
+}
+
+// Back-compat wrapper: existing callers pass a duration, not an absolute time.
+export function deleteOldSessions(olderThanMs: number): number {
+  return deleteBefore(Date.now() - olderThanMs).sessions;
+}
+
+// Count what deleteBefore(cutoffMs) would remove — same predicate, no writes.
+export function previewPurge(cutoffMs: number): import("@/types").PurgeCounts {
+  const d = getDb();
+  const one = (sql: string) => (d.prepare(sql).get(cutoffMs) as { n: number }).n;
+  return {
+    sessions: one("SELECT COUNT(*) n FROM sessions WHERE started_at < ?"),
+    agents: one("SELECT COUNT(*) n FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
+    events: one("SELECT COUNT(*) n FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
+    token_usage: one("SELECT COUNT(*) n FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
+  };
 }
 
 // Clear all monitor data
@@ -506,6 +548,90 @@ export function clearAllMonitorData(): { sessions: number; agents: number; event
   const tokenUsage = d.prepare("DELETE FROM token_usage").run().changes;
   const sessions = d.prepare("DELETE FROM sessions").run().changes;
   return { sessions, agents, events, token_usage: tokenUsage };
+}
+
+function dbFileBytes(): number {
+  try { return statSync(getDbPath()).size; } catch { return 0; }
+}
+
+// Roll up [from, to) into daily_usage in <=92-day chunks. rollupDailyUsageRange
+// caps its own scan at 92 days, so a single call over a longer span would skip
+// the oldest slice — chunking guarantees the whole deleted span is summarized.
+function rollupRangeChunked(from: number, to: number): void {
+  const CHUNK = 92 * 86400000;
+  let cursor = from;
+  while (cursor < to) {
+    const end = Math.min(cursor + CHUNK, to);
+    rollupDailyUsageRange(cursor, end);
+    cursor = end;
+  }
+}
+
+// Age-based purge: summarize the deleted span into daily_usage (preserved),
+// delete raw rows before cutoffMs, optionally VACUUM to reclaim file space.
+export function purgeOlderThan(cutoffMs: number, opts?: { vacuum?: boolean }): import("@/types").PurgeResult {
+  const d = getDb();
+  const oldest = (d.prepare("SELECT MIN(started_at) m FROM sessions WHERE started_at < ?").get(cutoffMs) as { m: number | null }).m;
+  if (oldest != null) rollupRangeChunked(oldest, cutoffMs);
+
+  const before = dbFileBytes();
+  const deleted = deleteBefore(cutoffMs);
+  if (opts?.vacuum) d.exec("VACUUM");
+  const after = dbFileBytes();
+  return { deleted, bytes_freed: Math.max(0, before - after) };
+}
+
+// Full wipe: all raw tables plus daily_usage. Keeps app_settings (config).
+export function purgeEverything(opts?: { vacuum?: boolean }): import("@/types").PurgeResult {
+  const d = getDb();
+  const before = dbFileBytes();
+  const raw = clearAllMonitorData();
+  const daily = d.prepare("DELETE FROM daily_usage").run().changes;
+  if (opts?.vacuum) d.exec("VACUUM");
+  const after = dbFileBytes();
+  return {
+    deleted: { sessions: raw.sessions, agents: raw.agents, events: raw.events, token_usage: raw.token_usage },
+    bytes_freed: Math.max(0, before - after),
+    daily_usage_cleared: daily,
+  };
+}
+
+export function getStorageInfo(): import("@/types").StorageInfo {
+  const d = getDb();
+  const count = (t: string) => (d.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n;
+  const range = d.prepare("SELECT MIN(started_at) oldest, MAX(started_at) newest FROM sessions").get() as { oldest: number | null; newest: number | null };
+  let walBytes = 0;
+  try { walBytes = statSync(getDbPath() + "-wal").size; } catch { /* no WAL file yet */ }
+  return {
+    db_bytes: dbFileBytes(),
+    wal_bytes: walBytes,
+    counts: {
+      sessions: count("sessions"),
+      agents: count("agents"),
+      agent_events: count("agent_events"),
+      token_usage: count("token_usage"),
+      daily_usage: count("daily_usage"),
+    },
+    oldest_ms: range.oldest,
+    newest_ms: range.newest,
+  };
+}
+
+const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+// Runs the retention purge at most once per 24h. Returns the purge result when
+// it ran, or null when disabled/throttled/misconfigured. Called from the stats
+// maintenance path; skips VACUUM to stay off the hot path's lock.
+export function runRetentionIfDue(nowMs: number): import("@/types").PurgeResult | null {
+  if (getSetting("retention_enabled") !== "1") return null;
+  const days = parseInt(getSetting("retention_days") || "30", 10);
+  if (!Number.isFinite(days) || days <= 0) return null;
+  const last = parseInt(getSetting("last_purge_at") || "0", 10);
+  if (nowMs - last < RETENTION_INTERVAL_MS) return null;
+
+  const result = purgeOlderThan(nowMs - days * 86400000, { vacuum: false });
+  setSetting("last_purge_at", String(nowMs));
+  return result;
 }
 
 // Abandon stale sessions (idle > 5 minutes)

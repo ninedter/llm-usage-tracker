@@ -5,6 +5,7 @@ import { useCredentials } from "@/hooks/use-credentials";
 import { useMonitorSettings, type MonitorFontSize } from "@/hooks/use-monitor-settings";
 import { CredentialForm } from "@/components/settings/CredentialForm";
 import { ProviderStatus } from "@/components/settings/ProviderStatus";
+import { DataManagement } from "@/components/settings/DataManagement";
 
 // Mirrors the FONT_CLASSES "base" tier so the preview matches the real panel
 const FONT_PREVIEW: Record<MonitorFontSize, string> = {
@@ -105,6 +106,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      <DataManagement />
 
       <ProviderStatus />
 
