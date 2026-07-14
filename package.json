@@ -16,9 +16,8 @@
     "electron:dev": "tsc -p electron/tsconfig.json && concurrently --kill-others \"next dev -p 3123\" \"wait-on http://127.0.0.1:3123 && NODE_ENV=development ELECTRON_DEV_PORT=3123 electron .\"",
     "electron:compile": "tsc -p electron/tsconfig.json",
     "electron:preview": "npm run build && npm run electron:compile && electron .",
-    "electron:build": "npm run electron:clean && npm run build && npm run electron:compile && npm run electron:rebuild-for-build && electron-builder",
+    "electron:build": "npm run electron:clean && npm run build && npm run electron:compile && electron-builder",
     "electron:clean": "rm -rf dist-electron .next/standalone/dist-electron",
-    "electron:rebuild-for-build": "npx electron-rebuild -f -w better-sqlite3 && cp node_modules/better-sqlite3/build/Release/better_sqlite3.node .next/standalone/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
     "postbuild": "cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public"
   },
   "dependencies": {

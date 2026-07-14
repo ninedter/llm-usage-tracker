@@ -4,10 +4,11 @@ import {
   shell,
   Menu,
   nativeTheme,
-  utilityProcess,
+  dialog,
 } from "electron";
 import { join } from "path";
 import { createServer } from "net";
+import { spawn, execFileSync, type ChildProcess } from "child_process";
 import {
   existsSync,
   readFileSync,
@@ -15,6 +16,7 @@ import {
   mkdirSync,
   copyFileSync,
   readdirSync,
+  unlinkSync,
 } from "fs";
 import { randomBytes } from "crypto";
 import { createTray } from "./tray";
@@ -22,9 +24,19 @@ import { createTray } from "./tray";
 const IS_DEV = process.env.NODE_ENV === "development";
 const APP_NAME = "LLM Usage Tracker";
 
+// The always-on Docker tracker (docker-compose publishes 3789). When it is
+// healthy, the app attaches to it instead of running its own server, so there
+// is exactly ONE database — the container's named volume. The embedded server
+// (with its own userData DB) exists only as a fallback for when Docker is down.
+const DOCKER_PORT = parseInt(process.env.DOCKER_MONITOR_PORT || "3789", 10);
+
+type ServerMode = "docker" | "embedded" | "dev";
+
 let mainWindow: BrowserWindow | null = null;
-let serverProcess: Electron.UtilityProcess | null = null;
+let serverProcess: ChildProcess | null = null;
 let serverPort = 3000;
+let serverMode: ServerMode = "embedded";
+let dockerFallbackTried = false;
 
 /** Shared quitting state — exported so tray.ts can set it too */
 export let isQuitting = false;
@@ -76,6 +88,56 @@ function ensureDataDir(): string {
     mkdirSync(dir, { recursive: true });
   }
   return dir;
+}
+
+/** Well-known file the Claude Code hook reads to find the embedded server */
+function portFilePath(): string {
+  return join(ensureDataDir(), "server-port");
+}
+
+/** Is the Docker tracker up and serving? Short timeout — this gates startup. */
+async function dockerServerHealthy(timeoutMs = 1500): Promise<boolean> {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    const res = await fetch(`http://127.0.0.1:${DOCKER_PORT}/api/health`, {
+      signal: ctl.signal,
+    });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Locate a system Node.js binary for the embedded server.
+ *
+ * The server is spawned with SYSTEM node — never Electron's runtime
+ * (utilityProcess) — so better-sqlite3 stays built for the system-node ABI
+ * that vitest and `next dev` also use. One ABI everywhere ends the
+ * rebuild-per-runtime dance that kept breaking either the app or the tests.
+ */
+function findSystemNode(): string | null {
+  const candidates: string[] = [];
+  try {
+    const probe =
+      process.platform === "win32"
+        ? execFileSync("where", ["node"], { encoding: "utf8", timeout: 5000 })
+        : execFileSync("/bin/zsh", ["-lc", "command -v node"], {
+            encoding: "utf8",
+            timeout: 5000,
+          });
+    const found = probe.split("\n")[0].trim();
+    if (found) candidates.push(found);
+  } catch {
+    // no login-shell node; fall through to well-known paths
+  }
+  candidates.push("/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node");
+  for (const c of candidates) {
+    if (c && existsSync(c)) return c;
+  }
+  return null;
 }
 
 /** Load or generate the encryption key in the userData directory */
@@ -181,10 +243,18 @@ async function startServer(): Promise<number> {
     NODE_ENV: "production" as const,
   };
 
-  serverProcess = utilityProcess.fork(serverPath, [], {
+  const nodeBin = findSystemNode();
+  if (!nodeBin) {
+    throw new Error(
+      "No system Node.js found for the embedded server. Either start the Docker tracker (docker compose up -d) or install Node.js."
+    );
+  }
+  console.log(`[main] Spawning embedded server with ${nodeBin}`);
+
+  serverProcess = spawn(nodeBin, [serverPath], {
     env,
     cwd: join(basePath, ".next", "standalone"),
-    stdio: "pipe",
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
   serverProcess.stdout?.on("data", (data: Buffer) => {
@@ -232,6 +302,34 @@ function createWindow(): void {
   });
 
   mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
+
+  // If the Docker tracker goes away mid-session (container stopped), fall back
+  // to the embedded server once instead of leaving a dead window. Fires on the
+  // next navigation/reload against the unreachable origin.
+  mainWindow.webContents.on(
+    "did-fail-load",
+    async (_event, errorCode, errorDescription, _url, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3 /* ERR_ABORTED: benign */) return;
+      if (serverMode !== "docker" || dockerFallbackTried) return;
+      dockerFallbackTried = true;
+      console.warn(
+        `[main] Docker tracker unreachable (${errorDescription}) — falling back to embedded server`
+      );
+      try {
+        serverMode = "embedded";
+        serverPort = await startServer();
+        writeFileSync(portFilePath(), String(serverPort), "utf8");
+        mainWindow?.loadURL(`http://127.0.0.1:${serverPort}`);
+      } catch (err) {
+        dialog.showErrorBox(
+          `${APP_NAME} lost its server`,
+          `The Docker tracker stopped and the embedded fallback failed:\n${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }
+  );
 
   // Open external links in default browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -331,15 +429,37 @@ if (!gotLock) {
     }
 
     try {
-      serverPort = await startServer();
-      console.log(`[main] Server running on port ${serverPort}`);
+      if (!IS_DEV && (await dockerServerHealthy())) {
+        // Thin-client mode: attach to the always-on Docker tracker. One
+        // server, one database (the container's named volume) — the Electron
+        // and Docker instances can no longer diverge.
+        serverMode = "docker";
+        serverPort = DOCKER_PORT;
+        // No embedded server → no port file, so the Claude Code hook posts
+        // only to :3789 instead of double-posting into a second database.
+        try {
+          if (existsSync(portFilePath())) unlinkSync(portFilePath());
+        } catch {
+          // stale file is harmless — the hook port-scans before posting
+        }
+        console.log(
+          `[main] Docker tracker healthy on :${DOCKER_PORT} — thin-client mode (canonical DB)`
+        );
+      } else {
+        serverMode = IS_DEV ? "dev" : "embedded";
+        serverPort = await startServer();
+        console.log(`[main] ${serverMode} server running on port ${serverPort}`);
 
-      // Write the port to a well-known file so hooks can discover it
-      const portFile = join(ensureDataDir(), "server-port");
-      writeFileSync(portFile, String(serverPort), "utf8");
-      console.log(`[main] Port written to ${portFile}`);
+        // Write the port to a well-known file so hooks can discover it
+        writeFileSync(portFilePath(), String(serverPort), "utf8");
+        console.log(`[main] Port written to ${portFilePath()}`);
+      }
     } catch (err) {
       console.error("[main] Failed to start server:", err);
+      dialog.showErrorBox(
+        `${APP_NAME} could not start`,
+        `${err instanceof Error ? err.message : String(err)}`
+      );
       app.quit();
       return;
     }
