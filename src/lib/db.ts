@@ -983,11 +983,19 @@ export function getSessionAnalytics(from: number, to: number, sort = "started_at
       s.status,
       s.provider,
       (COALESCE(s.ended_at, ?) - s.started_at) as duration_ms,
-      COALESCE((SELECT SUM(input_tokens + output_tokens) FROM token_usage WHERE session_id = s.id), 0) as total_tokens,
-      COALESCE((SELECT SUM(cost) FROM token_usage WHERE session_id = s.id), 0) as cost,
-      (SELECT COUNT(*) FROM agent_events WHERE session_id = s.id AND event_type = 'tool_call') as tool_count,
+      COALESCE(tu.total_tokens, 0) as total_tokens,
+      COALESCE(tu.cost, 0) as cost,
+      COALESCE(ec.tool_count, 0) as tool_count,
       s.started_at
     FROM sessions s
+    LEFT JOIN (
+      SELECT session_id, SUM(input_tokens + output_tokens) AS total_tokens, SUM(cost) AS cost
+      FROM token_usage GROUP BY session_id
+    ) tu ON tu.session_id = s.id
+    LEFT JOIN (
+      SELECT session_id, COUNT(*) AS tool_count
+      FROM agent_events WHERE event_type = 'tool_call' GROUP BY session_id
+    ) ec ON ec.session_id = s.id
     WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.provider", provider)}
     ORDER BY ${sortCol} ${sortOrder}
     LIMIT ? OFFSET ?
@@ -997,7 +1005,6 @@ export function getSessionAnalytics(from: number, to: number, sort = "started_at
 export function getToolAnalytics(from: number, to: number, provider?: DbProvider): import("@/types").ToolAnalytics {
   const d = getDb();
   const eP = pSql("provider", provider);
-  const tcP = pSql("tc.provider", provider);
   const pa = pArg(provider);
 
   const tools = d.prepare(`
@@ -1015,33 +1022,46 @@ export function getToolAnalytics(from: number, to: number, provider?: DbProvider
     ORDER BY call_count DESC
   `).all(from, to, ...pa) as import("@/types").ToolAnalyticEntry[];
 
-  for (const tool of tools) {
-    const failures = d.prepare(`
-      SELECT COUNT(*) as cnt FROM agent_events
-      WHERE event_type = 'tool_result' AND tool_name = ?
+  // One grouped scan for failures (SQLite LIKE is already case-insensitive
+  // for ASCII, so two patterns cover error/Error/FAIL/fail).
+  const failureRows = d.prepare(`
+    SELECT tool_name, COUNT(*) as cnt FROM agent_events
+    WHERE event_type = 'tool_result' AND tool_name IS NOT NULL
+      AND timestamp >= ? AND timestamp < ?${eP}
+      AND (summary LIKE '%error%' OR summary LIKE '%fail%')
+    GROUP BY tool_name
+  `).all(from, to, ...pa) as { tool_name: string; cnt: number }[];
+  const failures = new Map(failureRows.map(r => [r.tool_name, r.cnt]));
+
+  // One window-function pass for durations: pair each tool_result with the
+  // nearest PRECEDING tool_call of the same (agent, tool) within 300s. The
+  // old per-tool self-join was O(n²) per tool (6.1s at 58K events); this is
+  // a single ordered scan (~80ms) and pairs calls/results more accurately.
+  const durationRows = d.prepare(`
+    WITH seq AS (
+      SELECT tool_name, event_type, timestamp,
+        LAG(event_type) OVER w AS prev_type,
+        LAG(timestamp) OVER w AS prev_ts
+      FROM agent_events
+      WHERE event_type IN ('tool_call','tool_result') AND tool_name IS NOT NULL
         AND timestamp >= ? AND timestamp < ?${eP}
-        AND (summary LIKE '%error%' OR summary LIKE '%fail%' OR summary LIKE '%Error%' OR summary LIKE '%FAIL%')
-    `).get(tool.tool_name, from, to, ...pa) as { cnt: number };
-    tool.failure_count = failures.cnt;
+      WINDOW w AS (PARTITION BY agent_id, tool_name ORDER BY timestamp)
+    )
+    SELECT tool_name, AVG(timestamp - prev_ts) AS avg_ms
+    FROM seq
+    WHERE event_type = 'tool_result' AND prev_type = 'tool_call'
+      AND timestamp - prev_ts BETWEEN 0 AND 300000
+    GROUP BY tool_name
+  `).all(from, to, ...pa) as { tool_name: string; avg_ms: number | null }[];
+  const durations = new Map(durationRows.map(r => [r.tool_name, r.avg_ms]));
+
+  for (const tool of tools) {
+    tool.failure_count = failures.get(tool.tool_name) ?? 0;
     tool.success_count = tool.call_count - tool.failure_count;
     tool.success_rate = tool.call_count > 0
       ? Math.round((tool.success_count / tool.call_count) * 1000) / 10
       : 100;
-  }
-
-  for (const tool of tools) {
-    const avgDur = d.prepare(`
-      SELECT AVG(tr.timestamp - tc.timestamp) as avg_ms
-      FROM agent_events tc
-      JOIN agent_events tr ON tr.agent_id = tc.agent_id
-        AND tr.event_type = 'tool_result'
-        AND tr.tool_name = tc.tool_name
-        AND tr.timestamp > tc.timestamp
-        AND tr.timestamp < tc.timestamp + 300000
-      WHERE tc.event_type = 'tool_call' AND tc.tool_name = ?
-        AND tc.timestamp >= ? AND tc.timestamp < ?${tcP}
-    `).get(tool.tool_name, from, to, ...pa) as { avg_ms: number | null };
-    tool.avg_duration_ms = Math.round(avgDur.avg_ms || 0);
+    tool.avg_duration_ms = Math.round(durations.get(tool.tool_name) ?? 0);
   }
 
   const timeline = d.prepare(`
