@@ -1,8 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import { useAnalytics } from "@/hooks/use-analytics";
+import { NavLinks } from "@/components/ui/NavLinks";
+import { ProviderFilter } from "@/components/ui/ProviderFilter";
 import { TimeRangePicker } from "@/components/analytics/TimeRangePicker";
 import { OverviewCards } from "@/components/analytics/OverviewCards";
 import { TrendChart } from "@/components/analytics/TrendChart";
@@ -17,6 +18,7 @@ type DetailTab = "insights" | "sessions" | "tools" | "files" | "models";
 export default function AnalyticsPage() {
   const {
     preset, setPreset, setCustomRange,
+    provider, setProvider,
     overview, trends, sessions,
     toolAnalytics, fileAnalytics, modelAnalytics, insights,
     overviewLoading, trendsLoading, sessionsLoading,
@@ -36,20 +38,13 @@ export default function AnalyticsPage() {
           <p className="mt-0.5 text-sm text-zinc-500">Usage insights and cost breakdown</p>
         </div>
         <div className="titlebar-no-drag flex items-center gap-3">
+          <ProviderFilter value={provider} onChange={setProvider} />
           <TimeRangePicker
             preset={preset}
             onPresetChange={setPreset}
             onCustomRange={setCustomRange}
           />
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            Dashboard
-          </Link>
+          <NavLinks current="/analytics" />
         </div>
       </div>
 

@@ -5,6 +5,7 @@ import { AgentCard } from "@/components/monitor/AgentCard";
 import { useState, useEffect, useMemo } from "react";
 import { useMonitorSettings, type MonitorFontSize } from "@/hooks/use-monitor-settings";
 import { useNow } from "@/hooks/use-now";
+import type { ProviderFilterValue } from "@/components/ui/ProviderFilter";
 import type { AgentEvent, AgentSession } from "@/types";
 
 type ViewMode = "activity" | "agents" | "sessions";
@@ -129,6 +130,8 @@ function SessionCard({ session, fc }: { session: AgentSession; fc: ReturnType<ty
 
 export function AgentMonitorPanel() {
   const {
+    provider,
+    setProvider,
     agents,
     workingAgents,
     idleAgents,
@@ -331,6 +334,28 @@ export function AgentMonitorPanel() {
               {mode.charAt(0).toUpperCase() + mode.slice(1)}
             </button>
           ))}
+
+          {/* Provider scope — applies to every view (activity, agents, sessions) */}
+          <div className="ml-2 flex items-center gap-0.5 border-l border-zinc-800 pl-2">
+            {([
+              { key: "all", label: "All" },
+              { key: "anthropic", label: "Claude" },
+              { key: "openai", label: "OpenAI" },
+            ] as { key: ProviderFilterValue; label: string }[]).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setProvider(key)}
+                aria-pressed={provider === key}
+                className={`rounded px-1.5 py-0.5 ${fc.tiny} font-medium transition-colors ${
+                  provider === key
+                    ? "bg-zinc-700 text-zinc-200"
+                    : "text-zinc-600 hover:text-zinc-400"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
           {/* Search — only for agents view */}
           {viewMode === "agents" && (

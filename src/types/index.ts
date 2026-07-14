@@ -133,6 +133,9 @@ export interface SessionRecord {
 }
 
 export interface AgentRecord {
+  // Inherited from the agent's session (agents has no provider column of its
+  // own). Present on listAgents() rows; absent on plain SELECT * lookups.
+  provider?: DbProvider;
   id: string;
   session_id: string;
   parent_agent_id: string | null;
@@ -188,6 +191,7 @@ export interface AgentSession {
   status: string;
   project: string;
   entrypoint: string;
+  provider?: DbProvider;
   agent_count: number;
   working_count: number;
   subagent_count: number;

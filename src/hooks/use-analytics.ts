@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useMemo } from "react";
 import useSWR from "swr";
+import { providerParam, type ProviderFilterValue } from "@/components/ui/ProviderFilter";
 import type {
   ApiResponse,
   AnalyticsOverview,
@@ -42,6 +43,7 @@ function presetToRange(preset: Preset): { from: number; to: number } {
 export function useAnalytics() {
   const [preset, setPresetState] = useState<Preset>("7d");
   const [customRange, setCustomRangeState] = useState<{ from: number; to: number } | null>(null);
+  const [provider, setProvider] = useState<ProviderFilterValue>("all");
 
   const timeRange = useMemo(() => {
     if (customRange) return customRange;
@@ -57,7 +59,9 @@ export function useAnalytics() {
     setCustomRangeState({ from, to });
   }, []);
 
-  const params = `from=${timeRange.from}&to=${timeRange.to}`;
+  // Every panel below keys off `params`, so appending the provider here is what
+  // scopes all seven queries at once.
+  const params = `from=${timeRange.from}&to=${timeRange.to}${providerParam(provider)}`;
   const swrOpts = { revalidateOnFocus: false, refreshInterval: 60_000 };
 
   const { data: overview, isLoading: overviewLoading } = useSWR<AnalyticsOverview>(
@@ -97,6 +101,8 @@ export function useAnalytics() {
     timeRange,
     setPreset,
     setCustomRange,
+    provider,
+    setProvider,
     overview: overview || null,
     trends: trends || [],
     sessions: sessions || [],

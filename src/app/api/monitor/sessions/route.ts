@@ -1,11 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { listSessions } from "@/lib/db";
+import { readProvider } from "@/lib/provider-param";
 import type { ApiResponse, AgentSession } from "@/types";
 
-// GET /api/monitor/sessions — List all sessions
-export async function GET(): Promise<NextResponse<ApiResponse<AgentSession[]>>> {
+// GET /api/monitor/sessions — List all sessions (optionally one provider)
+export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<AgentSession[]>>> {
   try {
-    const sessions = listSessions();
+    const url = new URL(req.url);
+    const provider = readProvider(url);
+
+    const sessions = listSessions(50, provider);
     return NextResponse.json({ success: true, data: sessions });
   } catch (error) {
     return NextResponse.json(

@@ -113,6 +113,19 @@ export function AgentCard({ agent, events, onExpandEvents, compact, fontSize = "
                 {agent.type}
               </span>
             )}
+            {/* Which provider this agent came from — the whole point of the
+                All/Claude/OpenAI scope, so don't make the user infer it. */}
+            {agent.provider && (
+              <span
+                className={`flex-shrink-0 rounded-full px-1.5 py-0.5 ${fc.tiny} font-medium ${
+                  agent.provider === "openai"
+                    ? "bg-emerald-500/15 text-emerald-400"
+                    : "bg-amber-500/15 text-amber-400"
+                }`}
+              >
+                {agent.provider === "openai" ? "OpenAI" : "Claude"}
+              </span>
+            )}
           </div>
 
           {/* Current activity line */}

@@ -249,23 +249,33 @@ export function listAgents(filters?: {
   session_id?: string;
   status?: string;
   type?: string;
+  provider?: DbProvider;
   limit?: number;
   offset?: number;
 }): AgentRecord[] {
   const clauses: string[] = [];
   const values: unknown[] = [];
 
-  if (filters?.session_id) { clauses.push("session_id = ?"); values.push(filters.session_id); }
-  if (filters?.status) { clauses.push("status = ?"); values.push(filters.status); }
-  if (filters?.type) { clauses.push("type = ?"); values.push(filters.type); }
+  if (filters?.session_id) { clauses.push("a.session_id = ?"); values.push(filters.session_id); }
+  if (filters?.status) { clauses.push("a.status = ?"); values.push(filters.status); }
+  if (filters?.type) { clauses.push("a.type = ?"); values.push(filters.type); }
+  if (filters?.provider) { clauses.push("s.provider = ?"); values.push(filters.provider); }
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = filters?.limit ?? 100;
   const offset = filters?.offset ?? 0;
 
-  return getDb().prepare(
-    `SELECT * FROM agents ${where} ORDER BY started_at DESC LIMIT ? OFFSET ?`
-  ).all(...values, limit, offset) as AgentRecord[];
+  // agents carries no provider column of its own — it inherits its session's.
+  // Selecting it here is what lets the monitor badge and filter agents by
+  // provider without a schema change.
+  return getDb().prepare(`
+    SELECT a.*, COALESCE(s.provider, 'anthropic') AS provider
+    FROM agents a
+    LEFT JOIN sessions s ON s.id = a.session_id
+    ${where}
+    ORDER BY a.started_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...values, limit, offset) as AgentRecord[];
 }
 
 export function getAgentChildren(parentId: string): AgentRecord[] {
@@ -437,13 +447,14 @@ export function upsertCodexIngest(row: CodexIngestRow): void {
 
 // --- Sessions with aggregated data ---
 
-export function listSessions(limit = 50): AgentSession[] {
+export function listSessions(limit = 50, provider?: DbProvider): AgentSession[] {
   return getDb().prepare(`
     SELECT
       s.id as session_id,
       s.status,
       s.project,
       s.entrypoint,
+      s.provider,
       COUNT(DISTINCT a.id) as agent_count,
       COALESCE(SUM(CASE WHEN a.status = 'working' THEN 1 ELSE 0 END), 0) as working_count,
       COALESCE(SUM(CASE WHEN a.type = 'subagent' THEN 1 ELSE 0 END), 0) as subagent_count,
@@ -453,10 +464,11 @@ export function listSessions(limit = 50): AgentSession[] {
       s.updated_at as last_activity
     FROM sessions s
     LEFT JOIN agents a ON a.session_id = s.id
+    ${provider ? "WHERE s.provider = ?" : ""}
     GROUP BY s.id
     ORDER BY s.updated_at DESC
     LIMIT ?
-  `).all(limit) as AgentSession[];
+  `).all(...pArg(provider), limit) as AgentSession[];
 }
 
 export function getSessionAgents(sessionId: string): AgentRecord[] {
@@ -467,14 +479,32 @@ export function getSessionAgents(sessionId: string): AgentRecord[] {
 
 // --- Stats ---
 
-export function getMonitorStats(): MonitorStats {
+export function getMonitorStats(provider?: DbProvider): MonitorStats {
   const d = getDb();
-  const sessions = d.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active FROM sessions").get() as { total: number; active: number };
-  const agents = d.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status = 'working' THEN 1 ELSE 0 END) as working FROM agents").get() as { total: number; working: number };
+  const pa = pArg(provider);
+  const eP = pSql("provider", provider);
+
+  const sessions = d.prepare(
+    `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active FROM sessions WHERE 1=1${eP}`
+  ).get(...pa) as { total: number; active: number };
+
+  // agents inherits provider from its session, so scoping needs the join
+  const agents = d.prepare(`
+    SELECT COUNT(*) as total, SUM(CASE WHEN a.status = 'working' THEN 1 ELSE 0 END) as working
+    FROM agents a
+    LEFT JOIN sessions s ON s.id = a.session_id
+    WHERE 1=1${pSql("s.provider", provider)}
+  `).get(...pa) as { total: number; working: number };
+
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-  const events = d.prepare("SELECT COUNT(*) as total FROM agent_events").get() as { total: number };
-  const eventsToday = d.prepare("SELECT COUNT(*) as total FROM agent_events WHERE timestamp >= ?").get(todayStart.getTime()) as { total: number };
-  const cost = getTotalCost();
+  const events = d.prepare(`SELECT COUNT(*) as total FROM agent_events WHERE 1=1${eP}`).get(...pa) as { total: number };
+  const eventsToday = d.prepare(
+    `SELECT COUNT(*) as total FROM agent_events WHERE timestamp >= ?${eP}`
+  ).get(todayStart.getTime(), ...pa) as { total: number };
+
+  const cost = (d.prepare(
+    `SELECT COALESCE(SUM(cost), 0) as total FROM token_usage WHERE 1=1${eP}`
+  ).get(...pa) as { total: number }).total;
 
   return {
     total_sessions: sessions.total,
@@ -737,11 +767,39 @@ export function rollupDailyUsageRange(from: number, to: number): void {
 
 // --- Analytics Queries ---
 
-export function getAnalyticsOverview(from: number, to: number): import("@/types").AnalyticsOverview {
+// --- Provider scoping ---
+//
+// Every analytics query below takes an optional provider. `provider` lives on
+// sessions / agent_events / token_usage, so scoping is a single extra clause.
+// The one exception is daily_usage, which has no provider column — the two
+// queries that read it fall back to a live token_usage join when scoped (see
+// providerCostRows).
+const pSql = (col: string, provider?: DbProvider) => (provider ? ` AND ${col} = ?` : "");
+const pArg = (provider?: DbProvider): unknown[] => (provider ? [provider] : []);
+
+// Per-day cost/tokens for a single provider, derived live from token_usage
+// because the daily_usage rollup isn't provider-aware.
+function providerCostRows(from: number, to: number, provider: DbProvider) {
+  return getDb().prepare(`
+    SELECT
+      strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch', 'localtime') as date,
+      SUM(t.cost) as cost,
+      SUM(t.input_tokens + t.output_tokens) as tokens
+    FROM token_usage t
+    JOIN sessions s ON s.id = t.session_id
+    WHERE s.started_at >= ? AND s.started_at < ? AND s.provider = ?
+    GROUP BY date
+  `).all(from, to, provider) as { date: string; cost: number; tokens: number }[];
+}
+
+export function getAnalyticsOverview(from: number, to: number, provider?: DbProvider): import("@/types").AnalyticsOverview {
   const d = getDb();
   const periodLength = to - from;
   const prevFrom = from - periodLength;
   const prevTo = from;
+  const sP = pSql("s.provider", provider);
+  const eP = pSql("provider", provider);
+  const pa = pArg(provider);
 
   // Token/cost data (may be empty if no API usage tracking)
   const tokenData = d.prepare(`
@@ -751,22 +809,22 @@ export function getAnalyticsOverview(from: number, to: number): import("@/types"
       COALESCE(SUM(output_tokens), 0) as total_output_tokens
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id
-    WHERE s.started_at >= ? AND s.started_at < ?
-  `).get(from, to) as { total_cost: number; total_input_tokens: number; total_output_tokens: number };
+    WHERE s.started_at >= ? AND s.started_at < ?${sP}
+  `).get(from, to, ...pa) as { total_cost: number; total_input_tokens: number; total_output_tokens: number };
 
   // Session count from sessions table directly (independent of token data)
   const sessionData = d.prepare(`
     SELECT COUNT(*) as session_count
     FROM sessions
-    WHERE started_at >= ? AND started_at < ?
-  `).get(from, to) as { session_count: number };
+    WHERE started_at >= ? AND started_at < ?${eP}
+  `).get(from, to, ...pa) as { session_count: number };
 
   const prev = d.prepare(`
     SELECT COALESCE(SUM(cost), 0) as total_cost
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id
-    WHERE s.started_at >= ? AND s.started_at < ?
-  `).get(prevFrom, prevTo) as { total_cost: number };
+    WHERE s.started_at >= ? AND s.started_at < ?${sP}
+  `).get(prevFrom, prevTo, ...pa) as { total_cost: number };
 
   const costChangePct = prev.total_cost > 0
     ? ((tokenData.total_cost - prev.total_cost) / prev.total_cost) * 100
@@ -775,31 +833,31 @@ export function getAnalyticsOverview(from: number, to: number): import("@/types"
   const avgDuration = d.prepare(`
     SELECT COALESCE(AVG(COALESCE(ended_at, ?) - started_at), 0) as avg_ms
     FROM sessions
-    WHERE started_at >= ? AND started_at < ?
-  `).get(Date.now(), from, to) as { avg_ms: number };
+    WHERE started_at >= ? AND started_at < ?${eP}
+  `).get(Date.now(), from, to, ...pa) as { avg_ms: number };
 
   const topModel = d.prepare(`
     SELECT model, SUM(cost) as model_cost
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id
-    WHERE s.started_at >= ? AND s.started_at < ?
+    WHERE s.started_at >= ? AND s.started_at < ?${sP}
     GROUP BY model ORDER BY model_cost DESC LIMIT 1
-  `).get(from, to) as { model: string; model_cost: number } | undefined;
+  `).get(from, to, ...pa) as { model: string; model_cost: number } | undefined;
 
   const toolStats = d.prepare(`
     SELECT
       COUNT(CASE WHEN event_type = 'tool_call' THEN 1 END) as calls,
       COUNT(CASE WHEN event_type = 'tool_result' THEN 1 END) as results
     FROM agent_events
-    WHERE timestamp >= ? AND timestamp < ?
-  `).get(from, to) as { calls: number; results: number };
+    WHERE timestamp >= ? AND timestamp < ?${eP}
+  `).get(from, to, ...pa) as { calls: number; results: number };
 
   const toolFailures = d.prepare(`
     SELECT COUNT(*) as failures
     FROM agent_events
-    WHERE event_type = 'tool_result' AND timestamp >= ? AND timestamp < ?
+    WHERE event_type = 'tool_result' AND timestamp >= ? AND timestamp < ?${eP}
       AND (summary LIKE '%error%' OR summary LIKE '%fail%' OR summary LIKE '%Error%')
-  `).get(from, to) as { failures: number };
+  `).get(from, to, ...pa) as { failures: number };
 
   const successRate = toolStats.calls > 0
     ? ((toolStats.calls - toolFailures.failures) / toolStats.calls) * 100
@@ -821,34 +879,40 @@ export function getAnalyticsOverview(from: number, to: number): import("@/types"
   };
 }
 
-export function getAnalyticsTrends(from: number, to: number, granularity: "hourly" | "daily"): import("@/types").TrendPoint[] {
+export function getAnalyticsTrends(from: number, to: number, granularity: "hourly" | "daily", provider?: DbProvider): import("@/types").TrendPoint[] {
   const d = getDb();
   const bucketExpr = granularity === "daily" ? "%Y-%m-%d" : "%Y-%m-%dT%H:00";
+  const eP = pSql("provider", provider);
+  const pa = pArg(provider);
 
   // Sessions counted from the sessions table directly — a day with sessions
   // must show even when no token/cost data was captured for it.
   const sessionRows = d.prepare(`
     SELECT strftime('${bucketExpr}', started_at / 1000, 'unixepoch', 'localtime') as date, COUNT(*) as n
     FROM sessions
-    WHERE started_at >= ? AND started_at < ?
+    WHERE started_at >= ? AND started_at < ?${eP}
     GROUP BY date
-  `).all(from, to) as { date: string; n: number }[];
+  `).all(from, to, ...pa) as { date: string; n: number }[];
 
   const eventRows = d.prepare(`
     SELECT strftime('${bucketExpr}', timestamp / 1000, 'unixepoch', 'localtime') as date, COUNT(*) as n
     FROM agent_events
-    WHERE timestamp >= ? AND timestamp < ?
+    WHERE timestamp >= ? AND timestamp < ?${eP}
     GROUP BY date
-  `).all(from, to) as { date: string; n: number }[];
+  `).all(from, to, ...pa) as { date: string; n: number }[];
 
-  const costRows = granularity === "daily"
-    ? d.prepare(`
-        SELECT date, SUM(cost) as cost, SUM(input_tokens + output_tokens) as tokens
-        FROM daily_usage
-        WHERE date >= ? AND date <= ?
-        GROUP BY date
-      `).all(localDateStr(from), localDateStr(to)) as { date: string; cost: number; tokens: number }[]
-    : [];
+  // daily_usage has no provider column, so a scoped request reads token_usage
+  // live instead of the rollup.
+  const costRows = granularity !== "daily"
+    ? []
+    : provider
+      ? providerCostRows(from, to, provider)
+      : d.prepare(`
+          SELECT date, SUM(cost) as cost, SUM(input_tokens + output_tokens) as tokens
+          FROM daily_usage
+          WHERE date >= ? AND date <= ?
+          GROUP BY date
+        `).all(localDateStr(from), localDateStr(to)) as { date: string; cost: number; tokens: number }[];
 
   const sessions = new Map(sessionRows.map(r => [r.date, r.n]));
   const events = new Map(eventRows.map(r => [r.date, r.n]));
@@ -889,7 +953,7 @@ export function getAnalyticsTrends(from: number, to: number, granularity: "hourl
   return points;
 }
 
-export function getSessionAnalytics(from: number, to: number, sort = "started_at", order = "desc", limit = 20, offset = 0): import("@/types").SessionAnalyticRow[] {
+export function getSessionAnalytics(from: number, to: number, sort = "started_at", order = "desc", limit = 20, offset = 0, provider?: DbProvider): import("@/types").SessionAnalyticRow[] {
   const d = getDb();
   const validSorts: Record<string, string> = {
     started_at: "s.started_at",
@@ -906,20 +970,24 @@ export function getSessionAnalytics(from: number, to: number, sort = "started_at
       s.project,
       s.entrypoint,
       s.status,
+      s.provider,
       (COALESCE(s.ended_at, ?) - s.started_at) as duration_ms,
       COALESCE((SELECT SUM(input_tokens + output_tokens) FROM token_usage WHERE session_id = s.id), 0) as total_tokens,
       COALESCE((SELECT SUM(cost) FROM token_usage WHERE session_id = s.id), 0) as cost,
       (SELECT COUNT(*) FROM agent_events WHERE session_id = s.id AND event_type = 'tool_call') as tool_count,
       s.started_at
     FROM sessions s
-    WHERE s.started_at >= ? AND s.started_at < ?
+    WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.provider", provider)}
     ORDER BY ${sortCol} ${sortOrder}
     LIMIT ? OFFSET ?
-  `).all(Date.now(), from, to, limit, offset) as import("@/types").SessionAnalyticRow[];
+  `).all(Date.now(), from, to, ...pArg(provider), limit, offset) as import("@/types").SessionAnalyticRow[];
 }
 
-export function getToolAnalytics(from: number, to: number): import("@/types").ToolAnalytics {
+export function getToolAnalytics(from: number, to: number, provider?: DbProvider): import("@/types").ToolAnalytics {
   const d = getDb();
+  const eP = pSql("provider", provider);
+  const tcP = pSql("tc.provider", provider);
+  const pa = pArg(provider);
 
   const tools = d.prepare(`
     SELECT
@@ -931,18 +999,18 @@ export function getToolAnalytics(from: number, to: number): import("@/types").To
       0 as avg_duration_ms
     FROM agent_events
     WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
-      AND timestamp >= ? AND timestamp < ?
+      AND timestamp >= ? AND timestamp < ?${eP}
     GROUP BY tool_name
     ORDER BY call_count DESC
-  `).all(from, to) as import("@/types").ToolAnalyticEntry[];
+  `).all(from, to, ...pa) as import("@/types").ToolAnalyticEntry[];
 
   for (const tool of tools) {
     const failures = d.prepare(`
       SELECT COUNT(*) as cnt FROM agent_events
       WHERE event_type = 'tool_result' AND tool_name = ?
-        AND timestamp >= ? AND timestamp < ?
+        AND timestamp >= ? AND timestamp < ?${eP}
         AND (summary LIKE '%error%' OR summary LIKE '%fail%' OR summary LIKE '%Error%' OR summary LIKE '%FAIL%')
-    `).get(tool.tool_name, from, to) as { cnt: number };
+    `).get(tool.tool_name, from, to, ...pa) as { cnt: number };
     tool.failure_count = failures.cnt;
     tool.success_count = tool.call_count - tool.failure_count;
     tool.success_rate = tool.call_count > 0
@@ -960,8 +1028,8 @@ export function getToolAnalytics(from: number, to: number): import("@/types").To
         AND tr.timestamp > tc.timestamp
         AND tr.timestamp < tc.timestamp + 300000
       WHERE tc.event_type = 'tool_call' AND tc.tool_name = ?
-        AND tc.timestamp >= ? AND tc.timestamp < ?
-    `).get(tool.tool_name, from, to) as { avg_ms: number | null };
+        AND tc.timestamp >= ? AND tc.timestamp < ?${tcP}
+    `).get(tool.tool_name, from, to, ...pa) as { avg_ms: number | null };
     tool.avg_duration_ms = Math.round(avgDur.avg_ms || 0);
   }
 
@@ -973,23 +1041,23 @@ export function getToolAnalytics(from: number, to: number): import("@/types").To
       0 as duration_ms
     FROM agent_events
     WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
-      AND timestamp >= ? AND timestamp < ?
+      AND timestamp >= ? AND timestamp < ?${eP}
     ORDER BY timestamp DESC
     LIMIT 500
-  `).all(from, to) as import("@/types").ToolTimelinePoint[];
+  `).all(from, to, ...pa) as import("@/types").ToolTimelinePoint[];
 
   return { tools, timeline: timeline.reverse() };
 }
 
-export function getFileAnalytics(from: number, to: number): import("@/types").FileAnalytics {
+export function getFileAnalytics(from: number, to: number, provider?: DbProvider): import("@/types").FileAnalytics {
   const d = getDb();
 
   const rows = d.prepare(`
     SELECT files_affected, tool_name
     FROM agent_events
     WHERE files_affected IS NOT NULL AND files_affected != ''
-      AND timestamp >= ? AND timestamp < ?
-  `).all(from, to) as { files_affected: string; tool_name: string | null }[];
+      AND timestamp >= ? AND timestamp < ?${pSql("provider", provider)}
+  `).all(from, to, ...pArg(provider)) as { files_affected: string; tool_name: string | null }[];
 
   const fileMap = new Map<string, { count: number; tools: Map<string, number> }>();
 
@@ -1036,7 +1104,7 @@ export function getFileAnalytics(from: number, to: number): import("@/types").Fi
   return { files, directories };
 }
 
-export function getModelAnalytics(from: number, to: number): import("@/types").ModelAnalytics {
+export function getModelAnalytics(from: number, to: number, provider?: DbProvider): import("@/types").ModelAnalytics {
   const d = getDb();
 
   const models = d.prepare(`
@@ -1049,18 +1117,33 @@ export function getModelAnalytics(from: number, to: number): import("@/types").M
       SUM(t.cache_write_tokens) as cache_write_tokens
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id
-    WHERE s.started_at >= ? AND s.started_at < ?
+    WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.provider", provider)}
     GROUP BY t.model
     ORDER BY cost DESC
-  `).all(from, to) as import("@/types").ModelEntry[];
+  `).all(from, to, ...pArg(provider)) as import("@/types").ModelEntry[];
 
-  const trend = d.prepare(`
-    SELECT date, model, SUM(cost) as cost, SUM(input_tokens + output_tokens) as tokens
-    FROM daily_usage
-    WHERE date >= ? AND date <= ?
-    GROUP BY date, model
-    ORDER BY date ASC
-  `).all(localDateStr(from), localDateStr(to)) as import("@/types").ModelTrendPoint[];
+  // Same daily_usage limitation as getAnalyticsTrends: no provider column, so a
+  // scoped request bucket-sums token_usage live instead.
+  const trend = provider
+    ? d.prepare(`
+        SELECT
+          strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch', 'localtime') as date,
+          t.model,
+          SUM(t.cost) as cost,
+          SUM(t.input_tokens + t.output_tokens) as tokens
+        FROM token_usage t
+        JOIN sessions s ON s.id = t.session_id
+        WHERE s.started_at >= ? AND s.started_at < ? AND s.provider = ?
+        GROUP BY date, t.model
+        ORDER BY date ASC
+      `).all(from, to, provider) as import("@/types").ModelTrendPoint[]
+    : d.prepare(`
+        SELECT date, model, SUM(cost) as cost, SUM(input_tokens + output_tokens) as tokens
+        FROM daily_usage
+        WHERE date >= ? AND date <= ?
+        GROUP BY date, model
+        ORDER BY date ASC
+      `).all(localDateStr(from), localDateStr(to)) as import("@/types").ModelTrendPoint[];
 
   return { models, trend };
 }
@@ -1068,8 +1151,12 @@ export function getModelAnalytics(from: number, to: number): import("@/types").M
 const EXPLORE_TOOLS = "('Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch')";
 const MODIFY_TOOLS = "('Edit', 'Write', 'NotebookEdit')";
 
-export function getUsageInsights(from: number, to: number): import("@/types").UsageInsights {
+export function getUsageInsights(from: number, to: number, provider?: DbProvider): import("@/types").UsageInsights {
   const d = getDb();
+  const eP = pSql("provider", provider);
+  const aeP = pSql("ae.provider", provider);
+  const sP = pSql("s.provider", provider);
+  const pa = pArg(provider);
 
   const heatmap = d.prepare(`
     SELECT
@@ -1077,9 +1164,9 @@ export function getUsageInsights(from: number, to: number): import("@/types").Us
       CAST(strftime('%H', timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) as hour,
       COUNT(*) as events
     FROM agent_events
-    WHERE timestamp >= ? AND timestamp < ?
+    WHERE timestamp >= ? AND timestamp < ?${eP}
     GROUP BY dow, hour
-  `).all(from, to) as import("@/types").HeatmapCell[];
+  `).all(from, to, ...pa) as import("@/types").HeatmapCell[];
 
   const projects = d.prepare(`
     SELECT
@@ -1090,29 +1177,29 @@ export function getUsageInsights(from: number, to: number): import("@/types").Us
       COUNT(DISTINCT strftime('%Y-%m-%d', ae.timestamp / 1000, 'unixepoch', 'localtime')) as active_days,
       MAX(s.updated_at) as last_active
     FROM sessions s
-    LEFT JOIN agent_events ae ON ae.session_id = s.id AND ae.timestamp >= ? AND ae.timestamp < ?
-    WHERE s.started_at >= ? AND s.started_at < ?
+    LEFT JOIN agent_events ae ON ae.session_id = s.id AND ae.timestamp >= ? AND ae.timestamp < ?${aeP}
+    WHERE s.started_at >= ? AND s.started_at < ?${sP}
     GROUP BY s.project
     ORDER BY events DESC
     LIMIT 12
-  `).all(from, to, from, to) as import("@/types").ProjectUsage[];
+  `).all(from, to, ...pa, from, to, ...pa) as import("@/types").ProjectUsage[];
 
   const dayRows = d.prepare(`
     SELECT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch', 'localtime') as date, COUNT(*) as events
     FROM agent_events
-    WHERE timestamp >= ? AND timestamp < ?
+    WHERE timestamp >= ? AND timestamp < ?${eP}
     GROUP BY date
     ORDER BY events DESC
-  `).all(from, to) as { date: string; events: number }[];
+  `).all(from, to, ...pa) as { date: string; events: number }[];
 
   const peakHourRow = d.prepare(`
     SELECT CAST(strftime('%H', timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) as hour, COUNT(*) as events
     FROM agent_events
-    WHERE timestamp >= ? AND timestamp < ?
+    WHERE timestamp >= ? AND timestamp < ?${eP}
     GROUP BY hour
     ORDER BY events DESC
     LIMIT 1
-  `).get(from, to) as { hour: number; events: number } | undefined;
+  `).get(from, to, ...pa) as { hour: number; events: number } | undefined;
 
   // Sessions that never received a SessionEnd hook have ended_at NULL — clamp
   // their duration to the last observed event instead of "still running"
@@ -1127,35 +1214,35 @@ export function getUsageInsights(from: number, to: number): import("@/types").Us
         ) - s.started_at
       ), 0) as longest_ms
     FROM sessions s
-    WHERE s.started_at >= ? AND s.started_at < ?
-  `).get(from, to) as { n: number; longest_ms: number };
+    WHERE s.started_at >= ? AND s.started_at < ?${sP}
+  `).get(from, to, ...pa) as { n: number; longest_ms: number };
 
   const eventCount = d.prepare(
-    "SELECT COUNT(*) as n FROM agent_events WHERE timestamp >= ? AND timestamp < ?"
-  ).get(from, to) as { n: number };
+    `SELECT COUNT(*) as n FROM agent_events WHERE timestamp >= ? AND timestamp < ?${eP}`
+  ).get(from, to, ...pa) as { n: number };
 
   const toolMix = d.prepare(`
     SELECT
       SUM(CASE WHEN tool_name IN ${EXPLORE_TOOLS} THEN 1 ELSE 0 END) as explore_calls,
       SUM(CASE WHEN tool_name IN ${MODIFY_TOOLS} THEN 1 ELSE 0 END) as modify_calls
     FROM agent_events
-    WHERE event_type = 'tool_call' AND timestamp >= ? AND timestamp < ?
-  `).get(from, to) as { explore_calls: number | null; modify_calls: number | null };
+    WHERE event_type = 'tool_call' AND timestamp >= ? AND timestamp < ?${eP}
+  `).get(from, to, ...pa) as { explore_calls: number | null; modify_calls: number | null };
 
   const topTool = d.prepare(`
     SELECT tool_name, COUNT(*) as n
     FROM agent_events
-    WHERE event_type = 'tool_call' AND tool_name IS NOT NULL AND timestamp >= ? AND timestamp < ?
+    WHERE event_type = 'tool_call' AND tool_name IS NOT NULL AND timestamp >= ? AND timestamp < ?${eP}
     GROUP BY tool_name ORDER BY n DESC LIMIT 1
-  `).get(from, to) as { tool_name: string; n: number } | undefined;
+  `).get(from, to, ...pa) as { tool_name: string; n: number } | undefined;
 
   // Streak: consecutive local days with activity, counting back from today
   // (independent of the selected range so it reads as "as of now")
   const recentDays = d.prepare(`
     SELECT DISTINCT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch', 'localtime') as date
     FROM agent_events
-    WHERE timestamp >= ?
-  `).all(Date.now() - 60 * 86400000) as { date: string }[];
+    WHERE timestamp >= ?${eP}
+  `).all(Date.now() - 60 * 86400000, ...pa) as { date: string }[];
   const daySet = new Set(recentDays.map(r => r.date));
   let streak = 0;
   const cursor = new Date();

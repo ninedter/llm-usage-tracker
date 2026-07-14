@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import useSWR from "swr";
+import type { ProviderFilterValue } from "@/components/ui/ProviderFilter";
 import type { ApiResponse, AgentRecord, AgentEvent, AgentSession, MonitorStats } from "@/types";
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -24,12 +25,23 @@ export function useAgentMonitor() {
   const [events, setEvents] = useState<Map<string, AgentEvent[]>>(new Map());
   const [recentActivity, setRecentActivity] = useState<AgentEvent[]>([]);
   const [connected, setConnected] = useState(false);
+  const [provider, setProvider] = useState<ProviderFilterValue>("all");
   const eventSourceRef = useRef<EventSource | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const pq = provider === "all" ? "" : `provider=${provider}`;
+
+  // Switching provider must drop the merge-only caches, or agents from the tab
+  // you just left would linger (SWR onSuccess and SSE both only ever add).
+  useEffect(() => {
+    setAgents(new Map());
+    setEvents(new Map());
+    setRecentActivity([]);
+  }, [provider]);
+
   // Initial fetch of all agents — each successful fetch seeds the agents map
   const { mutate: refetchAgents } = useSWR<AgentRecord[]>(
-    "/api/monitor/agents?limit=200",
+    `/api/monitor/agents?limit=200${pq ? `&${pq}` : ""}`,
     fetcher,
     {
       revalidateOnFocus: false,
@@ -48,14 +60,14 @@ export function useAgentMonitor() {
 
   // Fetch sessions
   const { data: sessionsData, mutate: refetchSessions } = useSWR<AgentSession[]>(
-    "/api/monitor/sessions",
+    `/api/monitor/sessions${pq ? `?${pq}` : ""}`,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 30_000 }
   );
 
   // Fetch stats
   const { data: stats, mutate: refetchStats } = useSWR<MonitorStats>(
-    "/api/monitor/stats",
+    `/api/monitor/stats${pq ? `?${pq}` : ""}`,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 30_000 }
   );
@@ -145,17 +157,20 @@ export function useAgentMonitor() {
     }
   }, []);
 
-  // Memoized computed values — only recalculate when agents map changes
+  // Memoized computed values — only recalculate when agents map changes.
+  // The provider check is a safety net: SSE pushes agents of every provider
+  // into the map regardless of what the fetches were scoped to.
   const agentList = useMemo(() =>
     Array.from(agents.values())
       .filter((a) => a.status !== "archived")
+      .filter((a) => provider === "all" || a.provider === provider)
       .sort((a, b) => {
       const pa = STATUS_PRIORITY[a.status] ?? 3;
       const pb = STATUS_PRIORITY[b.status] ?? 3;
       if (pa !== pb) return pa - pb;
       return b.started_at - a.started_at;
     }),
-    [agents]
+    [agents, provider]
   );
 
   const workingAgents = useMemo(() => agentList.filter((a) => a.status === "working"), [agentList]);
@@ -191,6 +206,8 @@ export function useAgentMonitor() {
   }, []);
 
   return {
+    provider,
+    setProvider,
     agents: agentList,
     workingAgents,
     idleAgents,
