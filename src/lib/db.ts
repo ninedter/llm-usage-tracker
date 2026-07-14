@@ -557,6 +557,23 @@ export function getStorageInfo(): import("@/types").StorageInfo {
   };
 }
 
+const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+// Runs the retention purge at most once per 24h. Returns the purge result when
+// it ran, or null when disabled/throttled/misconfigured. Called from the stats
+// maintenance path; skips VACUUM to stay off the hot path's lock.
+export function runRetentionIfDue(nowMs: number): import("@/types").PurgeResult | null {
+  if (getSetting("retention_enabled") !== "1") return null;
+  const days = parseInt(getSetting("retention_days") || "30", 10);
+  if (!Number.isFinite(days) || days <= 0) return null;
+  const last = parseInt(getSetting("last_purge_at") || "0", 10);
+  if (nowMs - last < RETENTION_INTERVAL_MS) return null;
+
+  const result = purgeOlderThan(nowMs - days * 86400000, { vacuum: false });
+  setSetting("last_purge_at", String(nowMs));
+  return result;
+}
+
 // Abandon stale sessions (idle > 5 minutes)
 export function abandonStaleSessions(): number {
   const cutoff = Date.now() - 5 * 60 * 1000;

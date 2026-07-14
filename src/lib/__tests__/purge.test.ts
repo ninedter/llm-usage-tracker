@@ -132,3 +132,30 @@ describe("getStorageInfo", () => {
     expect(info.db_bytes).toBeGreaterThan(0);
   });
 });
+
+describe("runRetentionIfDue", () => {
+  it("no-ops when the policy is disabled", () => {
+    seedSession("old", 0);
+    expect(db.runRetentionIfDue(Date.now())).toBeNull();
+  });
+
+  it("purges when enabled and due, then throttles for 24h", () => {
+    const now = 100 * 86400000; // arbitrary "day 100"
+    seedSession("old", now - 40 * 86400000); // 40 days old
+    db.setSetting("retention_enabled", "1");
+    db.setSetting("retention_days", "30");
+
+    const first = db.runRetentionIfDue(now);
+    expect(first).not.toBeNull();
+    expect(first!.deleted.sessions).toBe(1);
+
+    // within 24h → throttled no-op even though new old data exists
+    seedSession("old2", now - 40 * 86400000);
+    expect(db.runRetentionIfDue(now + 3_600_000)).toBeNull();
+
+    // after 24h → runs again
+    const third = db.runRetentionIfDue(now + 25 * 3_600_000);
+    expect(third).not.toBeNull();
+    expect(third!.deleted.sessions).toBe(1);
+  });
+});
