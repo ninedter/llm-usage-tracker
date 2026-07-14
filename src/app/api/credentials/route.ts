@@ -74,6 +74,14 @@ export async function DELETE(
       );
     }
     deleteCredentials(provider);
+
+    // Same staleness gap as POST: without this, /api/health and the usage
+    // routes could keep serving "connected" results computed from the
+    // just-removed credentials for up to 30s.
+    claudeUsageCache.invalidate("claude");
+    openaiUsageCache.invalidate("openai");
+    ClaudeClient.invalidateTokenCache();
+
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json(
