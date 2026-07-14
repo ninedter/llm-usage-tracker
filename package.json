@@ -52,20 +52,37 @@
     "asar": false,
     "files": [
       "electron/**/*.js",
-      ".next/standalone/**/*",
-      "!.next/standalone/.data{,/**/*}",
-      "!.next/standalone/.docker-data{,/**/*}",
-      "!.next/standalone/.claude{,/**/*}",
-      "!.next/standalone/.env*",
-      "!.next/standalone/credentials.enc.json",
-      "!.next/standalone/dist-electron{,/**/*}",
-      "!.next/standalone/node_modules/typescript{,/**/*}",
-      "!.next/standalone/docs{,/**/*}",
-      "!.next/standalone/src{,/**/*}",
-      "!.next/standalone/*.md",
-      "!.next/standalone/package-lock.json",
-      "!.next/standalone/tsconfig.tsbuildinfo",
+      "package.json",
+      "!node_modules{,/**/*}",
       "!dist-electron{,/**/*}"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": ".next/standalone",
+        "filter": [
+          "**/*",
+          "!.data{,/**/*}",
+          "!.docker-data{,/**/*}",
+          "!.claude{,/**/*}",
+          "!.env*",
+          "!credentials.enc.json",
+          "!dist-electron{,/**/*}",
+          "!docs{,/**/*}",
+          "!src{,/**/*}",
+          "!*.md",
+          "!package-lock.json",
+          "!tsconfig.tsbuildinfo"
+        ]
+      },
+      {
+        "from": ".next/standalone/node_modules",
+        "to": ".next/standalone/node_modules",
+        "filter": [
+          "**/*",
+          "!typescript{,/**/*}"
+        ]
+      }
     ],
     "icon": "build/icon.png",
     "mac": {

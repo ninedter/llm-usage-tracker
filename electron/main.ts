@@ -205,10 +205,12 @@ async function startServer(): Promise<number> {
   const dataDir = ensureDataDir();
   const encryptionKey = getOrCreateEncryptionKey(dataDir);
 
-  // The standalone server entry point
-  // With asar disabled, files are directly in Resources/app/
-  const appPath = app.getAppPath();
-  const basePath = appPath;
+  // The standalone server tree ships via extraResources — a plain copy that
+  // electron-builder's node-module dedupe can't rewrite into broken symlinks
+  // (it did exactly that when the tree travelled inside "files"). Packaged, it
+  // therefore lives at Contents/Resources/.next/standalone; in dev/unpackaged
+  // runs it sits in the project root as before.
+  const basePath = app.isPackaged ? process.resourcesPath : app.getAppPath();
 
   const serverPath = join(basePath, ".next", "standalone", "server.js");
 
