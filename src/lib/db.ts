@@ -536,6 +536,27 @@ export function purgeEverything(opts?: { vacuum?: boolean }): import("@/types").
   };
 }
 
+export function getStorageInfo(): import("@/types").StorageInfo {
+  const d = getDb();
+  const count = (t: string) => (d.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n;
+  const range = d.prepare("SELECT MIN(started_at) oldest, MAX(started_at) newest FROM sessions").get() as { oldest: number | null; newest: number | null };
+  let walBytes = 0;
+  try { walBytes = statSync(getDbPath() + "-wal").size; } catch { /* no WAL file yet */ }
+  return {
+    db_bytes: dbFileBytes(),
+    wal_bytes: walBytes,
+    counts: {
+      sessions: count("sessions"),
+      agents: count("agents"),
+      agent_events: count("agent_events"),
+      token_usage: count("token_usage"),
+      daily_usage: count("daily_usage"),
+    },
+    oldest_ms: range.oldest,
+    newest_ms: range.newest,
+  };
+}
+
 // Abandon stale sessions (idle > 5 minutes)
 export function abandonStaleSessions(): number {
   const cutoff = Date.now() - 5 * 60 * 1000;

@@ -117,3 +117,18 @@ describe("purgeOlderThan / purgeEverything", () => {
     expect(db.getSetting("retention_enabled")).toBe("1"); // config survives
   });
 });
+
+describe("getStorageInfo", () => {
+  it("reports per-table counts and the session time range", () => {
+    seedSession("a", 1000);
+    seedSession("b", 5000);
+    seedEvent("a", 1200);
+
+    const info = db.getStorageInfo();
+    expect(info.counts.sessions).toBe(2);
+    expect(info.counts.agent_events).toBe(1);
+    expect(info.oldest_ms).toBe(1000);
+    expect(info.newest_ms).toBe(5000);
+    expect(info.db_bytes).toBeGreaterThan(0);
+  });
+});
