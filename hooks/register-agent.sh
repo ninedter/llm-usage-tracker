@@ -13,7 +13,7 @@ if [ -n "${MONITOR_URL:-}" ]; then
   BASE_URL="${MONITOR_URL}/api/monitor"
 else
   MONITOR_HOST="${MONITOR_HOST:-127.0.0.1}"
-  MONITOR_PORT="${MONITOR_PORT:-3123}"
+  MONITOR_PORT="${MONITOR_PORT:-3789}"
   BASE_URL="http://${MONITOR_HOST}:${MONITOR_PORT}/api/monitor"
 fi
 
