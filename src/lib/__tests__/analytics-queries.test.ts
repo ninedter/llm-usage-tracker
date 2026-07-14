@@ -130,12 +130,14 @@ describe("maybeRollupRange throttle", () => {
   it("hard-bounds the seen cache at 256 entries", () => {
     const t = Date.parse("2026-07-12T00:00:00Z");
     for (let i = 0; i < 300; i++) {
-      maybeRollupRange(t + i, t + 86400000 + i * 60_000, t + 86400000 + i * 60_000);
+      maybeRollupRange(t + i, t + 86400000 + i * 10_000, t + 86400000 + i * 10_000);
     }
-    // 300 distinct fresh keys inserted within the hour — cap must still hold.
-    // The cache is module-private; assert via behavior: the OLDEST key was
-    // evicted, so re-rolling it succeeds immediately (returns true) even
-    // though its insert was <60s ago in wall-clock terms.
+    // 300 distinct fresh keys, all inserted within ~49.8 min (< 1h) — a
+    // time-based sweep of entries older than 1h would evict NOTHING here, so
+    // only a count-based hard bound can cap the cache. The cache is
+    // module-private; assert via behavior: the OLDEST key was evicted, so
+    // re-rolling it succeeds immediately (returns true) even though its
+    // insert was 30s ago in wall-clock terms.
     expect(maybeRollupRange(t + 0, t + 86400000 + 0, t + 86400000 + 30_000)).toBe(true);
   });
 });
