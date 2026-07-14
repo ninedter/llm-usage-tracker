@@ -52,10 +52,10 @@ export function useDataManagement() {
       if (json.success) {
         retention.mutate(json.data, { revalidate: false });
       } else {
-        await retention.mutate(); // re-sync from server on failure
+        await retention.mutate().catch(() => {}); // re-sync from server on failure
       }
     } catch {
-      await retention.mutate(); // revert optimistic UI on network error
+      await retention.mutate().catch(() => {}); // revert optimistic UI on network error
     }
   }, [retention]);
 
@@ -63,7 +63,6 @@ export function useDataManagement() {
     storage: storage.data,
     storageError: storage.error,
     retention: retention.data,
-    retentionError: retention.error,
     busy,
     preview,
     purge,
