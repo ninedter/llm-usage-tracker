@@ -114,12 +114,18 @@ export type AgentEventType =
   | "subagent_stop"
   | "compaction";
 
+// DB-row provider discriminator ('anthropic' | 'openai'). Distinct from
+// ProviderId above (which uses 'claude' and drives the dashboard usage
+// cards) — this is the value stored in sessions/agent_events/token_usage.
+export type DbProvider = "anthropic" | "openai";
+
 export interface SessionRecord {
   id: string;
   status: "active" | "completed" | "error" | "abandoned";
   project: string;
   cwd: string;
   entrypoint: string;
+  provider: DbProvider;
   started_at: number;
   ended_at: number | null;
   updated_at: number;
@@ -145,6 +151,8 @@ export interface AgentEvent {
   id: number;
   agent_id: string;
   session_id: string;
+  provider: DbProvider;
+  source_id: string | null; // Codex dedup key (call_id, or file+lineOffset); null for Claude events
   event_type: AgentEventType;
   tool_name: string | null;
   summary: string | null;
@@ -157,12 +165,22 @@ export interface AgentEvent {
 export interface TokenUsage {
   session_id: string;
   model: string;
+  provider: DbProvider;
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
   cost: number;
   updated_at: number;
+}
+
+// Per-file tail cursor for the Codex rollout watcher (backfill + live poll)
+export interface CodexIngestRow {
+  file_path: string;
+  byte_offset: number;
+  thread_id: string | null;
+  last_seen_at: number;
+  status: "active" | "done";
 }
 
 export interface AgentSession {

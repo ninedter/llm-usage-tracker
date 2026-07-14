@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
-import type { AgentRecord, AgentEvent, AgentSession, SessionRecord, TokenUsage, MonitorStats } from "@/types";
+import type { AgentRecord, AgentEvent, AgentSession, SessionRecord, TokenUsage, MonitorStats, DbProvider, CodexIngestRow } from "@/types";
 
 let db: Database.Database | null = null;
 
@@ -26,6 +26,7 @@ export function getDb(): Database.Database {
       project         TEXT NOT NULL DEFAULT '',
       cwd             TEXT NOT NULL DEFAULT '',
       entrypoint      TEXT NOT NULL DEFAULT '',
+      provider        TEXT NOT NULL DEFAULT 'anthropic',
       started_at      INTEGER NOT NULL,
       ended_at        INTEGER,
       updated_at      INTEGER NOT NULL,
@@ -52,6 +53,8 @@ export function getDb(): Database.Database {
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id        TEXT NOT NULL,
       session_id      TEXT NOT NULL DEFAULT '',
+      provider        TEXT NOT NULL DEFAULT 'anthropic',
+      source_id       TEXT,
       event_type      TEXT NOT NULL,
       tool_name       TEXT,
       summary         TEXT,
@@ -64,6 +67,7 @@ export function getDb(): Database.Database {
     CREATE TABLE IF NOT EXISTS token_usage (
       session_id      TEXT NOT NULL,
       model           TEXT NOT NULL,
+      provider        TEXT NOT NULL DEFAULT 'anthropic',
       input_tokens    INTEGER NOT NULL DEFAULT 0,
       output_tokens   INTEGER NOT NULL DEFAULT 0,
       cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
@@ -100,6 +104,15 @@ export function getDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_daily_usage_date ON daily_usage(date);
     CREATE INDEX IF NOT EXISTS idx_daily_usage_project ON daily_usage(project);
+
+    -- Per-file tail cursor for the Codex rollout watcher (backfill + live poll)
+    CREATE TABLE IF NOT EXISTS codex_ingest (
+      file_path     TEXT PRIMARY KEY,
+      byte_offset   INTEGER NOT NULL DEFAULT 0,
+      thread_id     TEXT,
+      last_seen_at  INTEGER NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'active'
+    );
   `);
 
   // Forward-compatible migrations: add columns if they don't exist
@@ -111,20 +124,39 @@ export function getDb(): Database.Database {
   const eventCols = db.prepare("PRAGMA table_info(agent_events)").all() as { name: string }[];
   const eventColNames = new Set(eventCols.map(c => c.name));
   if (!eventColNames.has("session_id")) db.exec("ALTER TABLE agent_events ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+  if (!eventColNames.has("provider")) db.exec("ALTER TABLE agent_events ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic'");
+  if (!eventColNames.has("source_id")) db.exec("ALTER TABLE agent_events ADD COLUMN source_id TEXT");
+
+  const sessionCols = db.prepare("PRAGMA table_info(sessions)").all() as { name: string }[];
+  const sessionColNames = new Set(sessionCols.map(c => c.name));
+  if (!sessionColNames.has("provider")) db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic'");
+
+  const tokenCols = db.prepare("PRAGMA table_info(token_usage)").all() as { name: string }[];
+  const tokenColNames = new Set(tokenCols.map(c => c.name));
+  if (!tokenColNames.has("provider")) db.exec("ALTER TABLE token_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic'");
+
+  // Provider/source_id indexes run after the ALTER TABLEs above so the
+  // columns they reference are guaranteed to exist on pre-existing DBs too
+  // (a fresh DB already has them from the CREATE TABLE block above).
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_source_id ON agent_events(source_id) WHERE source_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_events_provider ON agent_events(provider);
+    CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider);
+  `);
 
   return db;
 }
 
 // --- Session CRUD ---
 
-export function createSession(session: Omit<SessionRecord, "updated_at">): SessionRecord {
+export function createSession(session: Omit<SessionRecord, "updated_at" | "provider">, provider: DbProvider = "anthropic"): SessionRecord {
   const now = Date.now();
   const d = getDb();
   d.prepare(`
-    INSERT OR IGNORE INTO sessions (id, status, project, cwd, entrypoint, started_at, ended_at, updated_at, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(session.id, session.status, session.project, session.cwd, session.entrypoint, session.started_at, session.ended_at, now, session.metadata);
-  return { ...session, updated_at: now };
+    INSERT OR IGNORE INTO sessions (id, status, project, cwd, entrypoint, provider, started_at, ended_at, updated_at, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(session.id, session.status, session.project, session.cwd, session.entrypoint, provider, session.started_at, session.ended_at, now, session.metadata);
+  return { ...session, provider, updated_at: now };
 }
 
 export function getSession(id: string): SessionRecord | null {
@@ -282,18 +314,26 @@ export function ensureAgent(agentId: string, sessionId?: string, project?: strin
 
 // --- Event CRUD ---
 
-export function createEvent(event: Omit<AgentEvent, "id" | "created_at">): AgentEvent {
+export function createEvent(
+  event: Omit<AgentEvent, "id" | "created_at" | "provider" | "source_id">,
+  provider: DbProvider = "anthropic",
+  sourceId: string | null = null
+): AgentEvent {
   const now = Date.now();
   const d = getDb();
+  // Codex re-ingest passes the same sourceId for an already-seen record, so
+  // OR IGNORE lets the partial unique index on source_id silently dedup it.
+  // Claude events never pass sourceId, so their insert path is unchanged.
+  const insertVerb = sourceId !== null ? "INSERT OR IGNORE" : "INSERT";
   const result = d.prepare(`
-    INSERT INTO agent_events (agent_id, session_id, event_type, tool_name, summary, content, files_affected, timestamp, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ${insertVerb} INTO agent_events (agent_id, session_id, provider, source_id, event_type, tool_name, summary, content, files_affected, timestamp, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    event.agent_id, event.session_id, event.event_type,
+    event.agent_id, event.session_id, provider, sourceId, event.event_type,
     event.tool_name, event.summary, event.content, event.files_affected,
     event.timestamp, now
   );
-  return { ...event, id: Number(result.lastInsertRowid), created_at: now };
+  return { ...event, id: Number(result.lastInsertRowid), provider, source_id: sourceId, created_at: now };
 }
 
 export function listEvents(agentId: string, filters?: {
@@ -346,18 +386,19 @@ export function getLatestEvent(agentId: string): AgentEvent | null {
 
 // --- Token Usage ---
 
-export function upsertTokenUsage(usage: TokenUsage): void {
+export function upsertTokenUsage(usage: Omit<TokenUsage, "provider">, provider: DbProvider = "anthropic"): void {
   getDb().prepare(`
-    INSERT INTO token_usage (session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO token_usage (session_id, model, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id, model) DO UPDATE SET
+      provider = excluded.provider,
       input_tokens = excluded.input_tokens,
       output_tokens = excluded.output_tokens,
       cache_read_tokens = excluded.cache_read_tokens,
       cache_write_tokens = excluded.cache_write_tokens,
       cost = excluded.cost,
       updated_at = excluded.updated_at
-  `).run(usage.session_id, usage.model, usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens, usage.cost, usage.updated_at);
+  `).run(usage.session_id, usage.model, provider, usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens, usage.cost, usage.updated_at);
 }
 
 export function getSessionTokenUsage(sessionId: string): TokenUsage[] {
@@ -367,6 +408,25 @@ export function getSessionTokenUsage(sessionId: string): TokenUsage[] {
 export function getTotalCost(): number {
   const row = getDb().prepare("SELECT COALESCE(SUM(cost), 0) as total FROM token_usage").get() as { total: number };
   return row.total;
+}
+
+// --- Codex Ingest Cursor ---
+
+export function getCodexIngest(filePath: string): CodexIngestRow | null {
+  const row = getDb().prepare("SELECT * FROM codex_ingest WHERE file_path = ?").get(filePath) as CodexIngestRow | undefined;
+  return row ?? null;
+}
+
+export function upsertCodexIngest(row: CodexIngestRow): void {
+  getDb().prepare(`
+    INSERT INTO codex_ingest (file_path, byte_offset, thread_id, last_seen_at, status)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(file_path) DO UPDATE SET
+      byte_offset = excluded.byte_offset,
+      thread_id = excluded.thread_id,
+      last_seen_at = excluded.last_seen_at,
+      status = excluded.status
+  `).run(row.file_path, row.byte_offset, row.thread_id, row.last_seen_at, row.status);
 }
 
 // --- Sessions with aggregated data ---
