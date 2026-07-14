@@ -117,4 +117,25 @@ describe("maybeRollupRange throttle", () => {
     expect(maybeRollupRange(t, t + 86400000 + 61_000, t + 86400000 + 61_000)).toBe(true); // next minute
     expect(maybeRollupRange(t - 86400000, t + 86400000, t + 86400000)).toBe(true); // different from
   });
+
+  it("allows the SAME key again after the 60s TTL lapses", () => {
+    const t = Date.parse("2026-07-11T00:00:00Z");
+    const from = t;
+    const to = t + 86400000;
+    expect(maybeRollupRange(from, to, to + 1_000)).toBe(true);
+    expect(maybeRollupRange(from, to, to + 30_000)).toBe(false); // same key, inside TTL
+    expect(maybeRollupRange(from, to, to + 61_500)).toBe(true);  // same key, TTL lapsed
+  });
+
+  it("hard-bounds the seen cache at 256 entries", () => {
+    const t = Date.parse("2026-07-12T00:00:00Z");
+    for (let i = 0; i < 300; i++) {
+      maybeRollupRange(t + i, t + 86400000 + i * 60_000, t + 86400000 + i * 60_000);
+    }
+    // 300 distinct fresh keys inserted within the hour — cap must still hold.
+    // The cache is module-private; assert via behavior: the OLDEST key was
+    // evicted, so re-rolling it succeeds immediately (returns true) even
+    // though its insert was <60s ago in wall-clock terms.
+    expect(maybeRollupRange(t + 0, t + 86400000 + 0, t + 86400000 + 30_000)).toBe(true);
+  });
 });

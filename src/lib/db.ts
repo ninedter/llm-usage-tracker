@@ -640,12 +640,16 @@ export function maybeRollupRange(from: number, to: number, nowMs = Date.now()): 
   const key = `${from}|${Math.floor(to / 60_000)}`;
   const last = rollupSeen.get(key) ?? 0;
   if (nowMs - last < 60_000) return false;
+  rollupRangeChunked(from, to);
+  // Record AFTER the rollup so a thrown rollup isn't marked done — a retry
+  // within the window must be allowed to fill the gap.
   rollupSeen.set(key, nowMs);
   if (rollupSeen.size > 256) {
-    // prune stale keys so a long-lived server doesn't accumulate ranges
-    for (const [k, ts] of rollupSeen) if (nowMs - ts > 3_600_000) rollupSeen.delete(k);
+    // Hard bound: drop oldest entries down to 256. Losing a live key only
+    // costs one extra rollup later; unbounded growth costs memory forever.
+    const byAge = [...rollupSeen.entries()].sort((a, b) => a[1] - b[1]);
+    for (let i = 0; i < byAge.length - 256; i++) rollupSeen.delete(byAge[i][0]);
   }
-  rollupRangeChunked(from, to);
   return true;
 }
 
