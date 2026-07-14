@@ -27,14 +27,24 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<{ 
   }
 }
 
-// POST /api/monitor/purge — { days } — execute (with VACUUM)
+// POST /api/monitor/purge — { days } — execute (with VACUUM).
+// "Everything" must be an explicit choice, never a parse-failure default:
+// require days to be a positive integer or the literal "all".
 export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse<PurgeResult>>> {
   try {
-    const body = await req.json().catch(() => ({}));
-    const days = parseDays(body?.days);
-    const result = days === "all"
+    const body = await req.json().catch(() => null);
+    const raw = body?.days;
+    const isAll = raw === "all";
+    const isDays = typeof raw === "number" && Number.isInteger(raw) && raw > 0;
+    if (!isAll && !isDays) {
+      return NextResponse.json(
+        { success: false, error: { code: "PURGE_BAD_REQUEST", message: 'POST body must include "days" as a positive integer or "all".' } },
+        { status: 400 }
+      );
+    }
+    const result = isAll
       ? purgeEverything({ vacuum: true })
-      : purgeOlderThan(Date.now() - days * 86400000, { vacuum: true });
+      : purgeOlderThan(Date.now() - (raw as number) * 86400000, { vacuum: true });
     broadcastEvent({ type: "stats_updated", data: result });
     return NextResponse.json({ success: true, data: result });
   } catch (error) {

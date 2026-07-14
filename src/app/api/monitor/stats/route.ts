@@ -9,7 +9,7 @@ export async function GET(): Promise<NextResponse<ApiResponse<MonitorStats>>> {
     // Clean up stale sessions periodically (runs every ~30s via SWR refresh)
     abandonStaleSessions();
     archiveStaleAgents();
-    try { runRetentionIfDue(Date.now()); } catch { /* retention failure must not break stats */ }
+    try { runRetentionIfDue(Date.now()); } catch (e) { console.error("[retention] auto-purge failed:", e); }
     const stats = getMonitorStats();
     return NextResponse.json({ success: true, data: stats });
   } catch (error) {

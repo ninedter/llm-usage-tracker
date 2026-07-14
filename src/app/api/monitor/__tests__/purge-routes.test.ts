@@ -98,15 +98,26 @@ describe("/api/monitor/purge", () => {
     expect(db.getStorageInfo().counts.sessions).toBe(1); // the newer one remains
   });
 
-  it("POST with days='all' wipes everything", async () => {
+  it("POST with days='all' wipes everything, ignoring the cutoff", async () => {
     seedSession("a", 1000);
+    seedSession("recent", Date.now()); // a fresh session an age-cutoff would keep
     const req = new NextRequest("http://x/api/monitor/purge", {
       method: "POST",
       body: JSON.stringify({ days: "all" }),
       headers: { "Content-Type": "application/json" },
     });
     const json = await (await purgeRoute.POST(req)).json();
-    expect(json.data.deleted.sessions).toBe(1);
+    expect(json.data.deleted.sessions).toBe(2); // both ancient and recent
     expect(db.getStorageInfo().counts.sessions).toBe(0);
+  });
+
+  it("POST with an empty body is rejected (400) and deletes nothing", async () => {
+    seedSession("keep", Date.now() - 40 * 86400000);
+    const req = new NextRequest("http://x/api/monitor/purge", { method: "POST" }); // no body
+    const res = await purgeRoute.POST(req);
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.success).toBe(false);
+    expect(db.getStorageInfo().counts.sessions).toBe(1); // untouched
   });
 });
