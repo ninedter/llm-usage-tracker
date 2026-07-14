@@ -10,7 +10,7 @@ export function RefreshControl() {
     setRefreshing(true);
     await Promise.all([
       mutate("/api/usage/claude"),
-      mutate("/api/usage/antigravity"),
+      mutate("/api/usage/openai"),
       mutate("/api/health"),
     ]);
     // Small delay for visual feedback

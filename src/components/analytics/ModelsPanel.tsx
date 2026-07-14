@@ -1,6 +1,7 @@
 "use client";
 
-import type { ModelAnalytics } from "@/types";
+import { useMemo } from "react";
+import type { ModelAnalytics, ModelTrendPoint } from "@/types";
 
 interface ModelsPanelProps {
   data: ModelAnalytics | null;
@@ -20,6 +21,18 @@ function shortModelName(model: string): string {
 }
 
 export function ModelsPanel({ data, loading }: ModelsPanelProps) {
+  // Hooks must run unconditionally (before the loading/null early return
+  // below), so `trend` is derived here rather than via destructuring data.
+  const trend = useMemo(() => data?.trend ?? [], [data]);
+  const trendByDate = useMemo(() => {
+    const map = new Map<string, ModelTrendPoint[]>();
+    for (const t of trend) {
+      const list = map.get(t.date);
+      if (list) list.push(t); else map.set(t.date, [t]);
+    }
+    return map;
+  }, [trend]);
+
   if (loading || !data) {
     return (
       <div className="animate-pulse space-y-3 p-4">
@@ -30,7 +43,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
     );
   }
 
-  const { models, trend } = data;
+  const { models } = data;
   const totalCost = models.reduce((s, m) => s + m.cost, 0);
 
   const segments: Array<
@@ -47,7 +60,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
   const trendModels = [...new Set(trend.map((t) => t.model))];
   const maxDayCost = Math.max(
     ...trendDates.map((d) =>
-      trend.filter((t) => t.date === d).reduce((s, t) => s + t.cost, 0)
+      (trendByDate.get(d) ?? []).reduce((s, t) => s + t.cost, 0)
     ),
     0.01
   );
@@ -144,7 +157,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Usage Over Time</p>
           <div className="flex items-end gap-1" style={{ height: 80 }}>
             {trendDates.map((date) => {
-              const dayData = trend.filter((t) => t.date === date);
+              const dayData = trendByDate.get(date) ?? [];
               const isToday = date === new Date().toISOString().slice(0, 10);
               return (
                 <div key={date} className="flex-1 flex flex-col items-center gap-0.5">

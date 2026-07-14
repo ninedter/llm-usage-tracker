@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useAnalytics } from "@/hooks/use-analytics";
+import { useAnalytics, type AnalyticsTab } from "@/hooks/use-analytics";
 import { NavLinks } from "@/components/ui/NavLinks";
 import { ProviderFilter } from "@/components/ui/ProviderFilter";
 import { TimeRangePicker } from "@/components/analytics/TimeRangePicker";
@@ -13,9 +13,9 @@ import { FilesPanel } from "@/components/analytics/FilesPanel";
 import { ModelsPanel } from "@/components/analytics/ModelsPanel";
 import { InsightsPanel } from "@/components/analytics/InsightsPanel";
 
-type DetailTab = "insights" | "sessions" | "tools" | "files" | "models";
-
 export default function AnalyticsPage() {
+  const [activeTab, setActiveTab] = useState<AnalyticsTab>("insights");
+
   const {
     preset, setPreset, setCustomRange,
     provider, setProvider,
@@ -25,9 +25,7 @@ export default function AnalyticsPage() {
     toolsLoading, filesLoading, modelsLoading, insightsLoading,
     sessionSort, setSessionSort,
     sessionPage, setSessionPage,
-  } = useAnalytics();
-
-  const [activeTab, setActiveTab] = useState<DetailTab>("insights");
+  } = useAnalytics(activeTab);
 
   return (
     <div className="mx-auto flex w-full flex-1 flex-col px-4 pb-4">
@@ -58,7 +56,7 @@ export default function AnalyticsPage() {
       <div className="flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
         {/* Tabs */}
         <div className="flex border-b border-zinc-800 px-1">
-          {(["insights", "sessions", "tools", "files", "models"] as DetailTab[]).map((tab) => (
+          {(["insights", "sessions", "tools", "files", "models"] as AnalyticsTab[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}

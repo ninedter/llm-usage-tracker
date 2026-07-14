@@ -23,6 +23,8 @@ async function fetcher<T>(url: string): Promise<T> {
 
 type Preset = "today" | "7d" | "30d" | "all";
 
+export type AnalyticsTab = "insights" | "sessions" | "tools" | "files" | "models";
+
 function presetToRange(preset: Preset): { from: number; to: number } {
   const now = Date.now();
   const today = new Date();
@@ -40,7 +42,7 @@ function presetToRange(preset: Preset): { from: number; to: number } {
   }
 }
 
-export function useAnalytics() {
+export function useAnalytics(activeTab: AnalyticsTab) {
   const [preset, setPresetState] = useState<Preset>("7d");
   const [customRange, setCustomRangeState] = useState<{ from: number; to: number } | null>(null);
   const [provider, setProvider] = useState<ProviderFilterValue>("all");
@@ -64,6 +66,11 @@ export function useAnalytics() {
   const params = `from=${timeRange.from}&to=${timeRange.to}${providerParam(provider)}`;
   const swrOpts = { revalidateOnFocus: false, refreshInterval: 60_000 };
 
+  // Inactive tabs get a null SWR key: no fetch, no 60s polling, until the
+  // tab is actually selected. overview + trends stay unconditional since
+  // they're always visible above the tab strip.
+  const tabKey = (tab: AnalyticsTab, url: string) => (activeTab === tab ? url : null);
+
   const { data: overview, isLoading: overviewLoading } = useSWR<AnalyticsOverview>(
     `/api/analytics/overview?${params}`, fetcher, swrOpts
   );
@@ -76,24 +83,24 @@ export function useAnalytics() {
   const [sessionPage, setSessionPage] = useState(0);
 
   const { data: sessions, isLoading: sessionsLoading } = useSWR<SessionAnalyticRow[]>(
-    `/api/analytics/sessions?${params}&sort=${sessionSort.sort}&order=${sessionSort.order}&limit=20&offset=${sessionPage * 20}`,
+    tabKey("sessions", `/api/analytics/sessions?${params}&sort=${sessionSort.sort}&order=${sessionSort.order}&limit=20&offset=${sessionPage * 20}`),
     fetcher, swrOpts
   );
 
   const { data: toolAnalytics, isLoading: toolsLoading } = useSWR<ToolAnalytics>(
-    `/api/analytics/tools?${params}`, fetcher, swrOpts
+    tabKey("tools", `/api/analytics/tools?${params}`), fetcher, swrOpts
   );
 
   const { data: fileAnalytics, isLoading: filesLoading } = useSWR<FileAnalytics>(
-    `/api/analytics/files?${params}`, fetcher, swrOpts
+    tabKey("files", `/api/analytics/files?${params}`), fetcher, swrOpts
   );
 
   const { data: modelAnalytics, isLoading: modelsLoading } = useSWR<ModelAnalytics>(
-    `/api/analytics/models?${params}`, fetcher, swrOpts
+    tabKey("models", `/api/analytics/models?${params}`), fetcher, swrOpts
   );
 
   const { data: insights, isLoading: insightsLoading } = useSWR<UsageInsights>(
-    `/api/analytics/insights?${params}`, fetcher, swrOpts
+    tabKey("insights", `/api/analytics/insights?${params}`), fetcher, swrOpts
   );
 
   return {
