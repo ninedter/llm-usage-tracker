@@ -2,11 +2,11 @@
 
 import { useAgentMonitor } from "@/hooks/use-agent-monitor";
 import { AgentCard } from "@/components/monitor/AgentCard";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { useMonitorSettings, type MonitorFontSize } from "@/hooks/use-monitor-settings";
 import { useNow } from "@/hooks/use-now";
 import type { ProviderFilterValue } from "@/components/ui/ProviderFilter";
-import type { AgentEvent, AgentSession } from "@/types";
+import type { AgentEvent, AgentRecord, AgentSession } from "@/types";
 
 type ViewMode = "activity" | "agents" | "sessions";
 type AgentFilter = "all" | "working" | "idle" | "completed" | "failed";
@@ -62,7 +62,7 @@ function formatDuration(start: number, end: number | null, now: number): string 
 }
 
 // Activity feed item
-function ActivityItem({ event, fc }: { event: AgentEvent; fc: ReturnType<typeof useMonitorSettings>["fontClasses"] }) {
+const ActivityItem = memo(function ActivityItem({ event, fc }: { event: AgentEvent; fc: ReturnType<typeof useMonitorSettings>["fontClasses"] }) {
   const now = useNow();
   const dotColor = EVENT_DOT_COLORS[event.event_type] || "bg-zinc-500";
   const label = EVENT_LABELS[event.event_type] || event.event_type;
@@ -84,10 +84,10 @@ function ActivityItem({ event, fc }: { event: AgentEvent; fc: ReturnType<typeof 
       </div>
     </div>
   );
-}
+});
 
 // Session card
-function SessionCard({ session, fc }: { session: AgentSession; fc: ReturnType<typeof useMonitorSettings>["fontClasses"] }) {
+const SessionCard = memo(function SessionCard({ session, fc }: { session: AgentSession; fc: ReturnType<typeof useMonitorSettings>["fontClasses"] }) {
   const now = useNow();
   const isActive = session.status === "active";
   return (
@@ -126,7 +126,11 @@ function SessionCard({ session, fc }: { session: AgentSession; fc: ReturnType<ty
       </div>
     </div>
   );
-}
+});
+
+// Stable empty-array constant for the agents view gate below — a fresh []
+// on every render would defeat memoization of anything that depends on it.
+const EMPTY_AGENTS: AgentRecord[] = [];
 
 export function AgentMonitorPanel() {
   const {
@@ -146,6 +150,14 @@ export function AgentMonitorPanel() {
   } = useAgentMonitor();
 
   const { fontSize, setFontSize, fontClasses: fc, fontSizeOptions } = useMonitorSettings();
+
+  // events arrays are already capped at 200 in the hook, so pass them through
+  // by identity — a fresh .slice() per render would defeat AgentCard's memo
+  const EMPTY_EVENTS: AgentEvent[] = useMemo(() => [], []);
+  const eventsFor = useCallback(
+    (id: string) => events.get(id) ?? EMPTY_EVENTS,
+    [events, EMPTY_EVENTS]
+  );
 
   const [viewMode, setViewMode] = useState<ViewMode>("activity");
   const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
@@ -177,8 +189,11 @@ export function AgentMonitorPanel() {
   const failedCount = agents.filter((a) => a.status === "failed").length;
   const completedCount = agents.filter((a) => a.status === "completed").length;
 
-  // Filter agents — memoized with debounced search
+  // Filter agents — memoized with debounced search; skipped entirely unless
+  // the Agents tab is active, since it's the only consumer of the result.
   const filteredAgents = useMemo(() => {
+    if (viewMode !== "agents") return EMPTY_AGENTS;
+
     let list = agents;
     if (agentFilter === "working") list = workingAgents;
     else if (agentFilter === "idle") list = idleAgents;
@@ -196,7 +211,7 @@ export function AgentMonitorPanel() {
       );
     }
     return list;
-  }, [agents, workingAgents, idleAgents, agentFilter, debouncedSearch]);
+  }, [agents, workingAgents, idleAgents, agentFilter, debouncedSearch, viewMode]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
@@ -429,7 +444,7 @@ export function AgentMonitorPanel() {
                 <AgentCard
                   key={agent.id}
                   agent={agent}
-                  events={(events.get(agent.id) || []).slice(0, 200)}
+                  events={eventsFor(agent.id)}
                   onExpandEvents={fetchAgentEvents}
                   fontSize={fontSize}
                 />

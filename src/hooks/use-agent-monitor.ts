@@ -25,7 +25,7 @@ export function useAgentMonitor() {
   const [events, setEvents] = useState<Map<string, AgentEvent[]>>(new Map());
   const [recentActivity, setRecentActivity] = useState<AgentEvent[]>([]);
   const [connected, setConnected] = useState(false);
-  const [provider, setProvider] = useState<ProviderFilterValue>("all");
+  const [provider, setProviderRaw] = useState<ProviderFilterValue>("all");
   const eventSourceRef = useRef<EventSource | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -33,11 +33,12 @@ export function useAgentMonitor() {
 
   // Switching provider must drop the merge-only caches, or agents from the tab
   // you just left would linger (SWR onSuccess and SSE both only ever add).
-  useEffect(() => {
+  const setProviderAndReset = useCallback((p: ProviderFilterValue) => {
+    setProviderRaw(p);
     setAgents(new Map());
     setEvents(new Map());
     setRecentActivity([]);
-  }, [provider]);
+  }, []);
 
   // Initial fetch of all agents — each successful fetch seeds the agents map
   const { mutate: refetchAgents } = useSWR<AgentRecord[]>(
@@ -45,7 +46,7 @@ export function useAgentMonitor() {
     fetcher,
     {
       revalidateOnFocus: false,
-      refreshInterval: 30_000,
+      refreshInterval: 60_000,
       onSuccess: (fetched) => {
         setAgents((prev) => {
           const next = new Map(prev);
@@ -62,14 +63,14 @@ export function useAgentMonitor() {
   const { data: sessionsData, mutate: refetchSessions } = useSWR<AgentSession[]>(
     `/api/monitor/sessions${pq ? `?${pq}` : ""}`,
     fetcher,
-    { revalidateOnFocus: false, refreshInterval: 30_000 }
+    { revalidateOnFocus: false, refreshInterval: 60_000 }
   );
 
   // Fetch stats
   const { data: stats, mutate: refetchStats } = useSWR<MonitorStats>(
     `/api/monitor/stats${pq ? `?${pq}` : ""}`,
     fetcher,
-    { revalidateOnFocus: false, refreshInterval: 30_000 }
+    { revalidateOnFocus: false, refreshInterval: 60_000 }
   );
 
   // Stable refs for SSE callback to avoid re-subscribing
@@ -103,7 +104,12 @@ export function useAgentMonitor() {
           setEvents((prev) => {
             const next = new Map(prev);
             const existing = next.get(event.agent_id) || [];
-            next.set(event.agent_id, [...existing, event]);
+            // cap per-agent history: AgentCard renders at most 200 anyway,
+            // and an uncapped array is an unbounded memory leak on long runs
+            const appended = existing.length >= 200
+              ? [...existing.slice(existing.length - 199), event]
+              : [...existing, event];
+            next.set(event.agent_id, appended);
             return next;
           });
           // Add to recent activity feed (keep last 100)
@@ -180,21 +186,14 @@ export function useAgentMonitor() {
     [recentActivity, provider]
   );
 
-  const workingAgents = useMemo(() => agentList.filter((a) => a.status === "working"), [agentList]);
-  const idleAgents = useMemo(() => agentList.filter((a) => a.status === "idle"), [agentList]);
-  const completedAgents = useMemo(() => agentList.filter((a) => a.status === "completed" || a.status === "failed"), [agentList]);
-  const mainAgents = useMemo(() => agentList.filter((a) => a.type === "main"), [agentList]);
-  const subagents = useMemo(() => agentList.filter((a) => a.type === "subagent"), [agentList]);
-
-  // Group by session
-  const sessionGroups = useMemo(() => {
-    const groups = new Map<string, AgentRecord[]>();
+  const { workingAgents, idleAgents } = useMemo(() => {
+    const working: AgentRecord[] = [];
+    const idle: AgentRecord[] = [];
     for (const a of agentList) {
-      const list = groups.get(a.session_id) || [];
-      list.push(a);
-      groups.set(a.session_id, list);
+      if (a.status === "working") working.push(a);
+      else if (a.status === "idle") idle.push(a);
     }
-    return groups;
+    return { workingAgents: working, idleAgents: idle };
   }, [agentList]);
 
   const refetchAll = useCallback(() => {
@@ -214,15 +213,11 @@ export function useAgentMonitor() {
 
   return {
     provider,
-    setProvider,
+    setProvider: setProviderAndReset,
     agents: agentList,
     workingAgents,
     idleAgents,
-    completedAgents,
-    mainAgents,
-    subagents,
     sessions: sessionsData || [],
-    sessionGroups,
     events,
     recentActivity: visibleActivity,
     stats: stats || null,

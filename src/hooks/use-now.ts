@@ -5,20 +5,48 @@ import { useSyncExternalStore } from "react";
 // Module-level tick store: all subscribers share ONE interval, so any number
 // of components can call useNow() without spawning per-component timers.
 const listeners = new Set<() => void>();
-let intervalId: ReturnType<typeof setInterval> | null = null;
+let timer: ReturnType<typeof setInterval> | null = null;
+
+function notify() {
+  for (const listener of listeners) listener();
+}
+
+function startTicking() {
+  if (timer !== null) return;
+  timer = setInterval(notify, 1000);
+}
+
+function stopTicking() {
+  if (timer === null) return;
+  clearInterval(timer);
+  timer = null;
+}
+
+// Hidden tabs get throttled/suspended timers anyway, but every AgentCard
+// still re-renders on whatever ticks do land — pausing on document.hidden
+// stops that re-render storm outright instead of relying on the browser.
+function handleVisibility() {
+  if (document.hidden) {
+    stopTicking();
+  } else {
+    notify(); // immediate catch-up tick so "Xs ago" text is right on return
+    startTicking();
+  }
+}
 
 function subscribe(onStoreChange: () => void) {
   listeners.add(onStoreChange);
-  if (intervalId === null) {
-    intervalId = setInterval(() => {
-      for (const listener of listeners) listener();
-    }, 1000);
+  if (listeners.size === 1) {
+    document.addEventListener("visibilitychange", handleVisibility);
+    if (!document.hidden) {
+      startTicking();
+    }
   }
   return () => {
     listeners.delete(onStoreChange);
-    if (listeners.size === 0 && intervalId !== null) {
-      clearInterval(intervalId);
-      intervalId = null;
+    if (listeners.size === 0) {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      stopTicking();
     }
   };
 }

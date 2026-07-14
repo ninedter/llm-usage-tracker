@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo, memo } from "react";
 import type { AgentRecord, AgentEvent } from "@/types";
 import { FONT_CLASSES, type MonitorFontSize } from "@/hooks/use-monitor-settings";
 import { useNow } from "@/hooks/use-now";
@@ -49,7 +49,7 @@ const EVENT_COLORS: Record<string, string> = {
   status_change: "text-amber-400 bg-amber-500/10",
 };
 
-export function AgentCard({ agent, events, onExpandEvents, compact, fontSize = "sm" }: AgentCardProps) {
+function AgentCardImpl({ agent, events, onExpandEvents, compact, fontSize = "sm" }: AgentCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   // All cards share one interval via the useNow() store — no per-card timers
@@ -73,15 +73,20 @@ export function AgentCard({ agent, events, onExpandEvents, compact, fontSize = "
     }
   };
 
-  // Derived data
-  const latestToolCall = [...events].reverse().find((e) => e.event_type === "tool_call");
-  const toolCalls = events.filter((e) => e.event_type === "tool_call");
-  const allFiles = new Set<string>();
-  for (const e of events) {
-    if (e.files_affected) {
-      try { (JSON.parse(e.files_affected) as string[]).forEach((f) => allFiles.add(f)); } catch { /* ignore */ }
+  // Derived data — memoized on `events` identity so the per-second useNow()
+  // tick (which re-renders this card for the elapsed-time text) doesn't
+  // re-run the reverse/filter scan and JSON.parse loop on every tick.
+  const { latestToolCall, toolCalls, allFiles } = useMemo(() => {
+    const latestToolCall = [...events].reverse().find((e) => e.event_type === "tool_call");
+    const toolCalls = events.filter((e) => e.event_type === "tool_call");
+    const allFiles = new Set<string>();
+    for (const e of events) {
+      if (e.files_affected) {
+        try { (JSON.parse(e.files_affected) as string[]).forEach((f) => allFiles.add(f)); } catch { /* ignore */ }
+      }
     }
-  }
+    return { latestToolCall, toolCalls, allFiles };
+  }, [events]);
 
   const isSubagent = agent.type === "subagent";
 
@@ -275,6 +280,11 @@ export function AgentCard({ agent, events, onExpandEvents, compact, fontSize = "
     </div>
   );
 }
+
+// Props are agent/events (by identity, capped+stabilized upstream) plus a
+// stable onExpandEvents callback and primitive compact/fontSize — memo lets
+// unaffected cards skip re-render entirely when a sibling agent updates.
+export const AgentCard = memo(AgentCardImpl);
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
