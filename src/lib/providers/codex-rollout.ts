@@ -63,6 +63,19 @@ export function parseRolloutLines(text: string): unknown[] {
   return out;
 }
 
+// Latest wall-clock time seen in a chunk, across *all* record types — not just
+// the ones we turn into events. This is the session's real last-activity time,
+// which is what the monitor's staleness logic has to key off; stamping
+// Date.now() would make 90-day-old history look like a live agent.
+export function readLastTimestamp(records: unknown[]): number {
+  let last = 0;
+  for (const raw of records) {
+    const t = ms(asRec(raw));
+    if (t > last) last = t;
+  }
+  return last;
+}
+
 export function readSessionInfo(records: unknown[]): CodexSessionInfo | null {
   const metaRec = records.map(asRec).find((r) => r.type === "session_meta");
   if (!metaRec) return null;

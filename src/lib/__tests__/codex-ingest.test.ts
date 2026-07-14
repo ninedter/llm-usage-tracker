@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -20,7 +20,7 @@ afterAll(() => {
 });
 
 import { getDb } from "@/lib/db";
-import { ingestRolloutFile } from "@/lib/providers/codex-ingest";
+import { ingestRolloutFile, closeIdleCodexSessions } from "@/lib/providers/codex-ingest";
 
 const T = "2026-07-14T06:00:00.000Z";
 const line = (payload: object, type = "event_msg", timestamp = T) =>
@@ -142,5 +142,96 @@ describe("ingestRolloutFile", () => {
     expect(agent.subagent_type).toBe("codex");
     expect(agent.parent_agent_id).toBeNull(); // parent link lives in metadata — no cross-file FK
     expect(JSON.parse(agent.metadata).parent_thread_id).toBe("root-1");
+  });
+});
+
+// The monitor hides `archived` agents and surfaces `working` ones. If ingest
+// stamped Date.now() and left everything "working", 90 days of backfilled
+// history would sit in the live view as fake busy agents — which is exactly
+// what these lock down.
+describe("session lifecycle", () => {
+  function rolloutAt(threadId: string, iso: string, opts?: { trailingCall?: boolean }): string {
+    const rows = [
+      line({ session_id: threadId, id: threadId, cwd: "/Users/me/proj", originator: "codex_work_desktop" }, "session_meta", iso),
+      line({ model: "gpt-5.6-sol" }, "turn_context", iso),
+      opts?.trailingCall
+        ? line({ type: "custom_tool_call", call_id: `${threadId}-x`, name: "exec", input: "sleep 60" }, "response_item", iso)
+        : line({ type: "web_search_end", call_id: `${threadId}-w`, query: "q" }, "event_msg", iso),
+    ];
+    return rows.join("\n") + "\n";
+  }
+
+  it("closes a finished rollout at the log's clock, not Date.now()", () => {
+    const oldIso = "2026-05-01T10:00:00.000Z";
+    const oldMs = Date.parse(oldIso);
+
+    const fp = write("rollout-old.jsonl", rolloutAt("old-1", oldIso));
+    const secs = oldMs / 1000;
+    utimesSync(fp, secs, secs); // the file hasn't been touched in months
+
+    ingestRolloutFile(fp);
+    const d = getDb();
+
+    const session = d.prepare("SELECT status, ended_at, updated_at FROM sessions WHERE id = 'codex:old-1'").get() as
+      { status: string; ended_at: number; updated_at: number };
+    expect(session.status).toBe("completed");
+    expect(session.ended_at).toBe(oldMs);
+    expect(session.updated_at).toBe(oldMs); // the whole point: NOT "now"
+
+    const agent = d.prepare("SELECT status, ended_at, current_tool FROM agents WHERE id = 'codex:old-1'").get() as
+      { status: string; ended_at: number; current_tool: string | null };
+    expect(agent.status).toBe("completed"); // → archiveStaleAgents() retires it from the live view
+    expect(agent.ended_at).toBe(oldMs);
+    expect(agent.current_tool).toBeNull();
+  });
+
+  it("keeps an actively-appended rollout live, showing the tool it's mid-way through", () => {
+    const nowIso = new Date().toISOString();
+    const fp = write("rollout-live.jsonl", rolloutAt("live-1", nowIso, { trailingCall: true }));
+    // freshly written, so its mtime is now → still live
+
+    ingestRolloutFile(fp);
+    const d = getDb();
+
+    const session = d.prepare("SELECT status, ended_at FROM sessions WHERE id = 'codex:live-1'").get() as
+      { status: string; ended_at: number | null };
+    expect(session.status).toBe("active");
+    expect(session.ended_at).toBeNull();
+
+    const agent = d.prepare("SELECT status, current_tool FROM agents WHERE id = 'codex:live-1'").get() as
+      { status: string; current_tool: string | null };
+    expect(agent.status).toBe("working");
+    expect(agent.current_tool).toBe("exec"); // a tool_call with no result yet
+  });
+
+  it("closeIdleCodexSessions retires a session whose log went quiet, and never touches Claude", () => {
+    const nowIso = new Date().toISOString();
+    const fp = write("rollout-quiet.jsonl", rolloutAt("quiet-1", nowIso, { trailingCall: true }));
+    ingestRolloutFile(fp);
+
+    const d = getDb();
+    // A Claude session must survive the sweep untouched.
+    d.prepare(
+      "INSERT INTO sessions (id, status, project, cwd, entrypoint, started_at, ended_at, updated_at, metadata, provider) VALUES ('claude-live','active','p','/p','cli',1,NULL,1,NULL,'anthropic')"
+    ).run();
+
+    expect((d.prepare("SELECT status FROM sessions WHERE id='codex:quiet-1'").get() as { status: string }).status).toBe("active");
+
+    // Ten minutes pass with no new bytes.
+    const closed = closeIdleCodexSessions(Date.now() + 10 * 60_000);
+    expect(closed).toBeGreaterThanOrEqual(1);
+
+    const session = d.prepare("SELECT status, ended_at FROM sessions WHERE id = 'codex:quiet-1'").get() as
+      { status: string; ended_at: number };
+    expect(session.status).toBe("completed");
+    expect(session.ended_at).toBe(Date.parse(nowIso)); // closed at its real last event
+
+    const agent = d.prepare("SELECT status, current_tool FROM agents WHERE id = 'codex:quiet-1'").get() as
+      { status: string; current_tool: string | null };
+    expect(agent.status).toBe("completed");
+    expect(agent.current_tool).toBeNull();
+
+    const claude = d.prepare("SELECT status FROM sessions WHERE id = 'claude-live'").get() as { status: string };
+    expect(claude.status).toBe("active"); // the sweep is scoped to provider='openai'
   });
 });

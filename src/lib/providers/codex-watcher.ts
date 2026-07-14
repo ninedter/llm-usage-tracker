@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { join, basename } from "path";
-import { ingestRolloutFile } from "@/lib/providers/codex-ingest";
+import { ingestRolloutFile, closeIdleCodexSessions } from "@/lib/providers/codex-ingest";
 import { broadcastEvent } from "@/lib/ws";
 
 const DAY = 86400000;
@@ -59,18 +59,38 @@ export function discoverRolloutFiles(sessionsDir: string, sinceMs: number): stri
     .sort();
 }
 
-/** One sweep: ingest anything new in every in-window rollout file. */
-export function pollOnce(sessionsDir: string, sinceMs = 0): number {
+/**
+ * One sweep: ingest anything new in every in-window rollout file, then retire
+ * sessions whose logs have gone quiet.
+ *
+ * `broadcast` is off for the initial backfill on purpose — pushing 37k historic
+ * events down the SSE channel would swamp the live Activity feed (and the
+ * browser) with months-old history pretending to be happening now.
+ */
+export function pollOnce(sessionsDir: string, sinceMs = 0, opts?: { broadcast?: boolean }): number {
+  const broadcast = opts?.broadcast ?? false;
+
   let inserted = 0;
   for (const file of discoverRolloutFiles(sessionsDir, sinceMs)) {
     try {
-      const res = ingestRolloutFile(file, (e) => broadcastEvent({ type: "event_created", data: e }));
+      const res = ingestRolloutFile(
+        file,
+        broadcast ? (e) => broadcastEvent({ type: "event_created", data: e }) : undefined
+      );
       inserted += res.inserted;
     } catch (err) {
       // One bad file must never stall the sweep or take the server down.
       console.error(`[codex-watcher] ingest failed for ${file}:`, err);
     }
   }
+
+  try {
+    const closed = closeIdleCodexSessions();
+    if (closed > 0 && broadcast) broadcastEvent({ type: "stats_updated", data: { closed } });
+  } catch (err) {
+    console.error("[codex-watcher] closing idle sessions failed:", err);
+  }
+
   return inserted;
 }
 
@@ -95,7 +115,7 @@ export function startCodexWatcher(opts?: { intervalMs?: number; backfillDays?: n
 
   try {
     const t0 = Date.now();
-    const n = pollOnce(sessionsDir, since);
+    const n = pollOnce(sessionsDir, since, { broadcast: false }); // history is not "live"
     console.log(`[codex-watcher] backfill: ${n} new events from the last ${backfillDays}d (${Date.now() - t0}ms)`);
   } catch (err) {
     console.error("[codex-watcher] backfill failed:", err);
@@ -106,7 +126,7 @@ export function startCodexWatcher(opts?: { intervalMs?: number; backfillDays?: n
     if (running) return; // a slow sweep must not overlap itself
     running = true;
     try {
-      pollOnce(sessionsDir, since);
+      pollOnce(sessionsDir, since, { broadcast: true }); // from here on, events really are live
     } catch (err) {
       console.error("[codex-watcher] poll failed:", err);
     } finally {
