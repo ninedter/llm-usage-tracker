@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { OpenAIClient } from "@/lib/providers/openai-client";
+import { openaiUsageCache } from "@/lib/providers/usage-cache";
 import type { ApiResponse, OpenAIUsageData } from "@/types";
 
 export async function GET(): Promise<
@@ -22,7 +23,7 @@ export async function GET(): Promise<
     }
 
     const client = new OpenAIClient(auth.accessToken, auth.accountId);
-    const data = await client.fetchUsage();
+    const data = await openaiUsageCache.get("openai", () => client.fetchUsage());
 
     return NextResponse.json({ success: true, data });
   } catch (error) {

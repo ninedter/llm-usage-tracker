@@ -1,4 +1,5 @@
 import { execSync } from "child_process";
+import { userInfo } from "os";
 import type { ClaudeUsageData } from "@/types";
 import { getUsageLevel } from "../constants";
 
@@ -90,12 +91,33 @@ export class ClaudeClient {
   /**
    * Try to read Claude Code's OAuth token from the macOS Keychain.
    * Returns the access token or null if not found.
+   *
+   * Memoized for 5 minutes: `security` forks a subprocess and hits the
+   * Keychain — doing that on every 60s usage poll (and every health check)
+   * stalls the event loop for no benefit. A failed/absent token also caches
+   * (as null) so a machine without Claude Code isn't re-probed per request.
    */
+  private static tokenCache: { value: string | null; at: number } | null = null;
+  private static readonly TOKEN_TTL_MS = 5 * 60 * 1000;
+
   static readClaudeCodeOAuthToken(): string | null {
+    const cached = ClaudeClient.tokenCache;
+    if (cached && Date.now() - cached.at < ClaudeClient.TOKEN_TTL_MS) return cached.value;
+    const value = ClaudeClient.readTokenUncached();
+    ClaudeClient.tokenCache = { value, at: Date.now() };
+    return value;
+  }
+
+  /** Drop the cached token (e.g. after an auth failure) so the next read re-probes. */
+  static invalidateTokenCache(): void {
+    ClaudeClient.tokenCache = null;
+  }
+
+  private static readTokenUncached(): string | null {
     try {
       if (process.platform !== "darwin") return null;
 
-      const username = execSync("whoami", { encoding: "utf-8" }).trim();
+      const username = userInfo().username;
       const raw = execSync(
         `security find-generic-password -s "Claude Code-credentials" -a "${username}" -w 2>/dev/null`,
         { encoding: "utf-8", timeout: 3000 }
@@ -142,6 +164,9 @@ export class ClaudeClient {
       try {
         usage = await ClaudeClient.fetchOAuthUsage(oauthToken);
       } catch {
+        // Token may be stale/revoked — drop the cache so the next call
+        // re-probes the Keychain instead of reusing a dead token for 5min.
+        ClaudeClient.invalidateTokenCache();
         // Fall back to session key
         usage = await this.fetchSessionUsage();
       }
