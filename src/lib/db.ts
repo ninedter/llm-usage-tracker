@@ -1034,23 +1034,26 @@ export function getToolAnalytics(from: number, to: number, provider?: DbProvider
   const failures = new Map(failureRows.map(r => [r.tool_name, r.cnt]));
 
   // One window-function pass for durations: pair each tool_result with the
-  // nearest PRECEDING tool_call of the same (agent, tool) within 300s. The
-  // old per-tool self-join was O(n²) per tool (6.1s at 58K events); this is
-  // a single ordered scan (~80ms) and pairs calls/results more accurately.
+  // NEAREST PRECEDING tool_call of the same (agent, tool) within 300s — a
+  // running MAX over prior rows, so back-to-back results from parallel
+  // same-tool calls all pair with the latest call instead of being dropped.
+  // The old per-tool self-join was O(n²) per tool (6.1s at 58K events); this
+  // is a single ordered scan (~80ms).
   const durationRows = d.prepare(`
     WITH seq AS (
       SELECT tool_name, event_type, timestamp,
-        LAG(event_type) OVER w AS prev_type,
-        LAG(timestamp) OVER w AS prev_ts
+        MAX(CASE WHEN event_type = 'tool_call' THEN timestamp END) OVER (
+          PARTITION BY agent_id, tool_name ORDER BY timestamp
+          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ) AS last_call_ts
       FROM agent_events
       WHERE event_type IN ('tool_call','tool_result') AND tool_name IS NOT NULL
         AND timestamp >= ? AND timestamp < ?${eP}
-      WINDOW w AS (PARTITION BY agent_id, tool_name ORDER BY timestamp)
     )
-    SELECT tool_name, AVG(timestamp - prev_ts) AS avg_ms
+    SELECT tool_name, AVG(timestamp - last_call_ts) AS avg_ms
     FROM seq
-    WHERE event_type = 'tool_result' AND prev_type = 'tool_call'
-      AND timestamp - prev_ts BETWEEN 0 AND 300000
+    WHERE event_type = 'tool_result' AND last_call_ts IS NOT NULL
+      AND timestamp - last_call_ts BETWEEN 0 AND 300000
     GROUP BY tool_name
   `).all(from, to, ...pa) as { tool_name: string; avg_ms: number | null }[];
   const durations = new Map(durationRows.map(r => [r.tool_name, r.avg_ms]));

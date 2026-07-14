@@ -84,3 +84,27 @@ describe("getSessionAnalytics (JOIN rewrite)", () => {
     expect(rows[0].session_id).toBe("s1");
   });
 });
+
+describe("avg duration pairing under parallel same-tool bursts", () => {
+  // Own time window 30 days after T0 so these rows never leak into the
+  // other describes' [T0, T0+10d] query ranges.
+  const T1 = T0 + 30 * 86400000;
+
+  beforeAll(() => {
+    createSession({ id: "s2", status: "active", project: "proj2", cwd: "/p2", entrypoint: "cli", started_at: T1, ended_at: null, metadata: null });
+    createAgent({ id: "a2", session_id: "s2", parent_agent_id: null, type: "main", subagent_type: null, description: "", status: "working", current_tool: null, started_at: T1, ended_at: null, metadata: null });
+    // Pre,Pre,Post,Post — two parallel Grep calls, results land back-to-back
+    createEvent({ agent_id: "a2", session_id: "s2", event_type: "tool_call", tool_name: "Grep", summary: "g1", content: null, files_affected: null, timestamp: T1 });
+    createEvent({ agent_id: "a2", session_id: "s2", event_type: "tool_call", tool_name: "Grep", summary: "g2", content: null, files_affected: null, timestamp: T1 + 1000 });
+    createEvent({ agent_id: "a2", session_id: "s2", event_type: "tool_result", tool_name: "Grep", summary: "ok", content: null, files_affected: null, timestamp: T1 + 1500 });
+    createEvent({ agent_id: "a2", session_id: "s2", event_type: "tool_result", tool_name: "Grep", summary: "ok", content: null, files_affected: null, timestamp: T1 + 2000 });
+  });
+
+  it("pairs every result with its nearest preceding call — none dropped", () => {
+    const { tools } = getToolAnalytics(T1 - 3_600_000, T1 + 3_600_000);
+    const grep = tools.find((t) => t.tool_name === "Grep")!;
+    expect(grep.call_count).toBe(2);
+    // both results pair with the nearest call at T1+1000: (500 + 1000) / 2
+    expect(grep.avg_duration_ms).toBe(750);
+  });
+});
