@@ -54,6 +54,8 @@
       "electron/**/*.js",
       ".next/standalone/**/*",
       "!.next/standalone/.data{,/**/*}",
+      "!.next/standalone/.docker-data{,/**/*}",
+      "!.next/standalone/.claude{,/**/*}",
       "!.next/standalone/.env*",
       "!.next/standalone/credentials.enc.json",
       "!.next/standalone/dist-electron{,/**/*}",
