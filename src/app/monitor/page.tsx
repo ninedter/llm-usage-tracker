@@ -52,7 +52,7 @@ export default function MonitorPage() {
       <div className="titlebar-drag mb-6 flex items-center justify-between pt-2">
         <div>
           <h1 className="text-2xl font-bold text-zinc-100">Agent Monitor</h1>
-          <p className="mt-1 text-sm text-zinc-400">Real-time observation of Claude Code agent activity.</p>
+          <p className="mt-1 text-sm text-zinc-400">Real-time observation of Claude Code and Codex agent activity.</p>
         </div>
         <div className="titlebar-no-drag flex items-center gap-3">
           <div className="flex items-center gap-1.5">
