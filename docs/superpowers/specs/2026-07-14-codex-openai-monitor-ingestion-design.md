@@ -28,8 +28,8 @@ by side.
 - Full parity: Codex sessions appear in the **live Monitor** (near-real-time)
   **and** in **historical Analytics** (Tools, Files, Models, Insights, Trends,
   Sessions, Overview).
-- A **provider dimension** (`openai` vs `anthropic`) with an
-  All / Anthropic / OpenAI toggle across the Monitor and Analytics.
+- A **provider dimension** (`openai` vs `claude`) with an
+  All / Claude / OpenAI toggle across the Monitor and Analytics.
 - Real **token** data for Codex (input / cached / output), **no fabricated
   dollar cost** — Codex runs on a flat ChatGPT subscription, not per-token
   billing.
@@ -168,12 +168,12 @@ belt-and-suspenders.
 Follow the existing forward-migration pattern in `db.ts` (~line 105, `PRAGMA
 table_info` + conditional `ALTER TABLE ADD COLUMN`).
 
-1. `provider TEXT NOT NULL DEFAULT 'anthropic'` added to **`sessions`**,
+1. `provider TEXT NOT NULL DEFAULT 'claude'` added to **`sessions`**,
    **`agent_events`**, and **`token_usage`**. Denormalized onto events and
    token_usage so every analytics query filters with a single `AND provider = ?`
-   and no extra join. Existing rows default to `'anthropic'`. The write helpers
+   and no extra join. Existing rows default to `'claude'`. The write helpers
    `createSession`, `createEvent`, and `upsertTokenUsage` gain an optional
-   `provider` argument defaulting to `'anthropic'`, so the existing Claude hook
+   `provider` argument defaulting to `'claude'`, so the existing Claude hook
    path is unchanged while `codex-ingest` passes `'openai'`.
 2. `source_id TEXT` added to **`agent_events`**, plus a partial unique index
    `CREATE UNIQUE INDEX ... ON agent_events(source_id) WHERE source_id IS NOT
@@ -201,13 +201,13 @@ CREATE TABLE IF NOT EXISTS codex_ingest (
 - Each analytics function in `db.ts` (`getAnalyticsOverview`,
   `getAnalyticsTrends`, `getSessionAnalytics`, `getToolAnalytics`,
   `getFileAnalytics`, `getModelAnalytics`, `getUsageInsights`) gains an optional
-  `provider?: 'openai' | 'anthropic'` argument that appends `AND provider = ?`
+  `provider?: 'openai' | 'claude'` argument that appends `AND provider = ?`
   (omitted = All). Denormalization means even queries that hit `agent_events`
   without a `sessions` join (tools, insights heatmap) filter directly.
 - The six `/api/analytics/*` routes and the monitor routes
   (`agents`, `sessions`, `stats`, `stream`) read `?provider=` and pass it
   through.
-- **UI:** an All / Anthropic / OpenAI segmented toggle in the Analytics header
+- **UI:** an All / Claude / OpenAI segmented toggle in the Analytics header
   (beside `TimeRangePicker`) and in the Monitor panel. `use-analytics.ts` and
   `use-agent-monitor.ts` thread the param. Session rows and `AgentCard` render a
   small provider badge (Claude / OpenAI).
@@ -256,7 +256,7 @@ lives in the app DB, never written back to `~/.codex`.
   asserting the normalized output (event_type, tool_name, files_affected,
   token totals, subagent linkage).
 - Idempotency test: ingest a fixture file twice → zero duplicate `agent_events`.
-- Provider-filter query test: seed anthropic + openai rows, assert each
+- Provider-filter query test: seed claude + openai rows, assert each
   analytics function returns the correctly filtered subset and All returns both.
 
 ## Build order (for the implementation plan)
