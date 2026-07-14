@@ -15,7 +15,16 @@ services:
     env_file:
       - .env.local
     volumes:
-      # SQLite DB + encrypted credentials (seed credentials.enc.json here once)
-      - ./.docker-data:/data
+      # SQLite DB + encrypted credentials. This MUST be a named volume, not a
+      # host bind mount: WAL mode keeps its wal-index in an mmap'd -shm file,
+      # and Docker Desktop's macOS bind mounts (VirtioFS) don't give mmap the
+      # coherence SQLite needs. Reads then return garbage pages and every query
+      # dies with SQLITE_NOTADB/SQLITE_CORRUPT while the file on disk is fine.
+      # Named volumes live on real ext4 inside the VM, where WAL works.
+      # For host access to the DB, use `npm run db:export`.
+      - llm-tracker-data:/data
       # Codex CLI login, read-only — tokens stay managed by `codex` on the host
       - ~/.codex:/codex:ro
+
+volumes:
+  llm-tracker-data:

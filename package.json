@@ -12,6 +12,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "db:export": "bash scripts/db-export.sh",
     "electron:dev": "tsc -p electron/tsconfig.json && concurrently --kill-others \"next dev -p 3123\" \"wait-on http://127.0.0.1:3123 && NODE_ENV=development ELECTRON_DEV_PORT=3123 electron .\"",
     "electron:compile": "tsc -p electron/tsconfig.json",
     "electron:preview": "npm run build && npm run electron:compile && electron .",

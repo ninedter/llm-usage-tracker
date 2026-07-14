@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useCredentials } from "@/hooks/use-credentials";
 import { useMonitorSettings, type MonitorFontSize } from "@/hooks/use-monitor-settings";
+import { NavLinks } from "@/components/ui/NavLinks";
 import { CredentialForm } from "@/components/settings/CredentialForm";
 import { ProviderStatus } from "@/components/settings/ProviderStatus";
 import { DataManagement } from "@/components/settings/DataManagement";
@@ -31,25 +31,9 @@ export default function SettingsPage() {
             Configure your API credentials and display preferences.
           </p>
         </div>
-        <Link
-          href="/"
-          className="titlebar-no-drag inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-        >
-          <svg
-            className="h-4 w-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M10 19l-7-7m0 0l7-7m-7 7h18"
-            />
-          </svg>
-          Dashboard
-        </Link>
+        <div className="titlebar-no-drag flex items-center gap-3">
+          <NavLinks current="/settings" />
+        </div>
       </div>
 
       {/* Agent Monitor Display Settings */}
