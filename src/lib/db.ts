@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { join } from "path";
 import { existsSync, mkdirSync, statSync } from "fs";
 import type { AgentRecord, AgentEvent, AgentSession, SessionRecord, TokenUsage, MonitorStats, DbProvider, CodexIngestRow } from "@/types";
+import { extractExecCommand, classifyCommand } from "@/lib/exec-classify";
 
 let db: Database.Database | null = null;
 
@@ -219,7 +220,9 @@ export function createAgent(agent: Omit<AgentRecord, "created_at">): AgentRecord
     agent.id, agent.session_id, agent.parent_agent_id, agent.type, agent.subagent_type,
     agent.description, agent.status, agent.current_tool, agent.started_at, agent.ended_at, agent.metadata, now
   );
-  return { ...agent, created_at: now };
+  // Re-read so the returned row (which gets broadcast over SSE) carries the
+  // session's provider like every other agent read.
+  return getAgent(agent.id) ?? { ...agent, created_at: now };
 }
 
 export function updateAgent(id: string, updates: Partial<Pick<AgentRecord, "status" | "ended_at" | "description" | "metadata" | "current_tool" | "subagent_type">>): AgentRecord | null {
@@ -242,7 +245,15 @@ export function updateAgent(id: string, updates: Partial<Pick<AgentRecord, "stat
 }
 
 export function getAgent(id: string): AgentRecord | null {
-  return getDb().prepare("SELECT * FROM agents WHERE id = ?").get(id) as AgentRecord | null;
+  // Carry the session's provider on every single-agent read: these rows are
+  // broadcast over SSE, and the monitor's provider tabs drop agents whose
+  // provider is missing.
+  return getDb().prepare(`
+    SELECT a.*, COALESCE(s.provider, 'anthropic') AS provider
+    FROM agents a
+    LEFT JOIN sessions s ON s.id = a.session_id
+    WHERE a.id = ?
+  `).get(id) as AgentRecord | null;
 }
 
 export function listAgents(filters?: {
@@ -1148,8 +1159,13 @@ export function getModelAnalytics(from: number, to: number, provider?: DbProvide
   return { models, trend };
 }
 
-const EXPLORE_TOOLS = "('Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch')";
-const MODIFY_TOOLS = "('Edit', 'Write', 'NotebookEdit')";
+// Tool names with one unambiguous intent, across BOTH providers (Claude's
+// dedicated tools + Codex's web_search / apply_patch). Codex's `exec` fits
+// neither bucket by name — it's a shell that both reads and writes — so exec
+// calls are classified per-command by verb (see classifyCommand) in
+// getUsageInsights instead.
+const EXPLORE_TOOLS = "('Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'web_search')";
+const MODIFY_TOOLS = "('Edit', 'Write', 'NotebookEdit', 'apply_patch')";
 
 export function getUsageInsights(from: number, to: number, provider?: DbProvider): import("@/types").UsageInsights {
   const d = getDb();
@@ -1229,6 +1245,26 @@ export function getUsageInsights(from: number, to: number, provider?: DbProvider
     WHERE event_type = 'tool_call' AND timestamp >= ? AND timestamp < ?${eP}
   `).get(from, to, ...pa) as { explore_calls: number | null; modify_calls: number | null };
 
+  // Codex `exec` is a shell that both reads and writes, so bucketing it by
+  // tool name would be a lie. Classify each call by its command verb instead;
+  // unrecognised verbs (node, npm, docker …) deliberately count as neither.
+  // substr keeps the scan light — the verb lives in the first bytes of the
+  // stored exec_command input.
+  let execExplore = 0;
+  let execModify = 0;
+  const execHeads = d.prepare(`
+    SELECT substr(content, 1, 300) as head
+    FROM agent_events
+    WHERE event_type = 'tool_call' AND tool_name = 'exec' AND content IS NOT NULL
+      AND timestamp >= ? AND timestamp < ?${eP}
+  `).all(from, to, ...pa) as { head: string }[];
+  for (const row of execHeads) {
+    const cmd = extractExecCommand(row.head);
+    const cls = cmd ? classifyCommand(cmd) : null;
+    if (cls === "explore") execExplore++;
+    else if (cls === "modify") execModify++;
+  }
+
   const topTool = d.prepare(`
     SELECT tool_name, COUNT(*) as n
     FROM agent_events
@@ -1271,8 +1307,8 @@ export function getUsageInsights(from: number, to: number, provider?: DbProvider
       peak_hour: peakHourRow ?? null,
       longest_session_ms: sessionAgg.longest_ms,
       avg_events_per_session: sessionAgg.n > 0 ? Math.round(eventCount.n / sessionAgg.n) : 0,
-      explore_calls: toolMix.explore_calls || 0,
-      modify_calls: toolMix.modify_calls || 0,
+      explore_calls: (toolMix.explore_calls || 0) + execExplore,
+      modify_calls: (toolMix.modify_calls || 0) + execModify,
       top_tool: topTool?.tool_name ?? null,
     },
   };

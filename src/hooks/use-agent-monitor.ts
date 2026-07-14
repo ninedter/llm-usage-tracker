@@ -173,6 +173,13 @@ export function useAgentMonitor() {
     [agents, provider]
   );
 
+  // SSE pushes every provider's events; the Activity tab must honour the
+  // provider scope just like the fetched agents/sessions/stats do.
+  const visibleActivity = useMemo(
+    () => (provider === "all" ? recentActivity : recentActivity.filter((e) => e.provider === provider)),
+    [recentActivity, provider]
+  );
+
   const workingAgents = useMemo(() => agentList.filter((a) => a.status === "working"), [agentList]);
   const idleAgents = useMemo(() => agentList.filter((a) => a.status === "idle"), [agentList]);
   const completedAgents = useMemo(() => agentList.filter((a) => a.status === "completed" || a.status === "failed"), [agentList]);
@@ -217,7 +224,7 @@ export function useAgentMonitor() {
     sessions: sessionsData || [],
     sessionGroups,
     events,
-    recentActivity,
+    recentActivity: visibleActivity,
     stats: stats || null,
     connected,
     fetchAgentEvents,

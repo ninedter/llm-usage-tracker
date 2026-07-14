@@ -143,9 +143,39 @@ describe("provider scoping", () => {
     expect(getUsageInsights(FROM, TO, "anthropic").stats.top_tool).toBe("Bash");
   });
 
+  it("classifies Codex exec calls into the explore/modify mix by command verb", () => {
+    const execEvent = (id: string, cmd: string) =>
+      createEvent(
+        {
+          agent_id: "codex:a-openai", session_id: "codex:s-openai", event_type: "tool_call",
+          tool_name: "exec", summary: cmd,
+          content: `const r = await tools.exec_command({"cmd":${JSON.stringify(cmd)}})`,
+          files_affected: null, timestamp: NOW,
+        },
+        "openai",
+        id
+      );
+
+    execEvent("exec-explore-1", 'rg -n "pattern" src');
+    execEvent("exec-explore-2", "cat package.json");
+    execEvent("exec-modify-1", "rm -rf .next/cache");
+    execEvent("exec-neither-1", "npm test"); // ambiguous runner — counted as neither
+
+    const stats = getUsageInsights(FROM, TO, "openai").stats;
+    expect(stats.explore_calls).toBe(2);
+    expect(stats.modify_calls).toBe(1);
+
+    // The Claude scope is untouched by exec classification
+    const claude = getUsageInsights(FROM, TO, "anthropic").stats;
+    expect(claude.explore_calls).toBe(0); // Bash is deliberately unclassified there
+  });
+
   it("an unscoped call still sees everything (the All tab is not a filter)", () => {
-    const all = getDb().prepare("SELECT COUNT(*) AS n FROM agent_events").get() as { n: number };
-    expect(all.n).toBe(2);
+    const count = (p?: "anthropic" | "openai") =>
+      (getDb().prepare(`SELECT COUNT(*) AS n FROM agent_events${p ? " WHERE provider = ?" : ""}`)
+        .get(...(p ? [p] : [])) as { n: number }).n;
+    expect(count("anthropic") + count("openai")).toBe(count());
+    expect(count()).toBeGreaterThan(0);
     expect(getUsageInsights(FROM, TO).projects.length).toBe(2);
   });
 });

@@ -1,4 +1,5 @@
 import type { AgentEventType } from "@/types";
+import { extractExecCommand } from "@/lib/exec-classify";
 
 // Pure mapper for Codex CLI rollout logs (~/.codex/sessions/**/rollout-*.jsonl).
 //
@@ -212,17 +213,22 @@ export function mapEventRecord(record: unknown, threadId: string): CodexMappedEv
       return [ev({ event_type: "stop", summary: "Turn complete", source_id: String(p.turn_id ?? `${threadId}:stop:${at}`) })];
 
     // Codex runs shell commands through a custom tool named "exec".
-    case "custom_tool_call":
+    case "custom_tool_call": {
       if (p.name !== "exec") return [];
+      const input = String(p.input ?? "");
+      // Surface the actual shell command, the way Claude's Bash events carry
+      // theirs — "exec" alone tells the activity feed nothing.
+      const cmd = extractExecCommand(input);
       return [
         ev({
           event_type: "tool_call",
           tool_name: "exec",
-          summary: "exec",
-          content: String(p.input ?? "").slice(0, 2000),
+          summary: (cmd || "exec").slice(0, 200),
+          content: input.slice(0, 2000),
           source_id: `${String(p.call_id ?? "")}:call`,
         }),
       ];
+    }
 
     case "custom_tool_call_output":
       return [
