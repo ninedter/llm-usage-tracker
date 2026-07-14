@@ -16,7 +16,7 @@ export default function Home() {
           <h1 className="text-2xl font-bold text-white">
             LLM Usage Tracker
           </h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 text-base text-zinc-500 dark:text-zinc-400">
             Monitor your AI usage and agent activity.
           </p>
         </div>
@@ -24,7 +24,7 @@ export default function Home() {
           <RefreshControl />
           <Link
             href="/analytics"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-base font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
           >
             <svg
               className="h-4 w-4"
@@ -43,7 +43,7 @@ export default function Home() {
           </Link>
           <Link
             href="/settings"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-base font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
           >
             <svg
               className="h-4 w-4"
@@ -69,18 +69,14 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Main content — usage left, agent monitor right */}
-      {/* min-h-0 lets this row shrink below its content so overflow actually clips */}
-      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
-        {/* Usage cards */}
-        <div className="w-80 flex-shrink-0 overflow-y-auto">
-          <DashboardGrid />
-        </div>
+      {/* Main content — usage cards on top (Claude left, OpenAI right), agent monitor below */}
+      <div className="mb-4 flex-shrink-0">
+        <DashboardGrid />
+      </div>
 
-        {/* Agent monitor */}
-        <div className="flex-1 overflow-hidden">
-          <AgentMonitorPanel />
-        </div>
+      {/* Agent monitor — min-h-0 lets it shrink below its content so the feed scrolls internally */}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <AgentMonitorPanel />
       </div>
     </div>
   );

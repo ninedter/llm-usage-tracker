@@ -72,12 +72,12 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
     <div className="p-3 space-y-4">
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Most Used Tools</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Most Used Tools</p>
           <div className="space-y-1.5">
             {tools.map((tool) => (
               <div key={tool.tool_name} className="flex items-center gap-2">
                 <span
-                  className="text-[10px] text-zinc-400 font-mono w-28 shrink-0 text-right truncate"
+                  className="text-sm text-zinc-400 font-mono w-28 shrink-0 text-right truncate"
                   title={tool.tool_name}
                 >
                   {nameOf(tool.tool_name)}
@@ -88,19 +88,19 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
                     style={{ width: `${(tool.call_count / maxCount) * 100}%` }}
                   />
                 </div>
-                <span className="text-[10px] text-zinc-600 font-mono w-8 shrink-0 text-right">{tool.call_count}</span>
+                <span className="text-sm text-zinc-600 font-mono w-8 shrink-0 text-right">{tool.call_count}</span>
               </div>
             ))}
           </div>
         </div>
 
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Success / Failure Rate</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Success / Failure Rate</p>
           <div className="space-y-1.5">
             {tools.map((tool) => (
               <div key={tool.tool_name} className="flex items-center gap-2">
                 <span
-                  className="text-[10px] text-zinc-400 font-mono w-28 shrink-0 text-right truncate"
+                  className="text-sm text-zinc-400 font-mono w-28 shrink-0 text-right truncate"
                   title={tool.tool_name}
                 >
                   {nameOf(tool.tool_name)}
@@ -109,7 +109,7 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
                   <div className="h-full bg-emerald-500" style={{ width: `${tool.success_rate}%` }} />
                   <div className="h-full bg-red-500" style={{ width: `${100 - tool.success_rate}%` }} />
                 </div>
-                <span className={`text-[10px] font-mono w-10 shrink-0 text-right ${tool.success_rate >= 95 ? "text-emerald-400" : tool.success_rate >= 80 ? "text-amber-400" : "text-red-400"}`}>
+                <span className={`text-sm font-mono w-10 shrink-0 text-right ${tool.success_rate >= 95 ? "text-emerald-400" : tool.success_rate >= 80 ? "text-amber-400" : "text-red-400"}`}>
                   {tool.success_rate}%
                 </span>
               </div>
@@ -121,8 +121,8 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
       {timeline.length > 0 && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500">Tool Call Timeline</p>
-            <p className="text-[8px] text-zinc-600">
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Tool Call Timeline</p>
+            <p className="text-xs text-zinc-600">
               {new Date(minTs).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}
               {" — "}
               {new Date(maxTs).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}
@@ -134,7 +134,7 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
               return (
                 <div key={name} className="flex items-center gap-2 h-4">
                   <span
-                    className="text-[8px] text-zinc-500 font-mono w-24 shrink-0 text-right truncate"
+                    className="text-xs text-zinc-500 font-mono w-24 shrink-0 text-right truncate"
                     title={name}
                   >
                     {nameOf(name)}
@@ -159,7 +159,7 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
               );
             })}
           </div>
-          <div className="flex gap-3 mt-2 text-[8px] text-zinc-600">
+          <div className="flex gap-3 mt-2 text-xs text-zinc-600">
             <span className="flex items-center gap-1">
               <span className="inline-block w-1.5 h-1.5 rounded-sm bg-emerald-500" /> Success
             </span>
@@ -172,7 +172,7 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
 
       {tools.length > 0 && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Average Duration per Tool</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Average Duration per Tool</p>
           <div className="grid grid-cols-4 gap-2">
             {tools
               .filter((t) => t.avg_duration_ms > 0)
@@ -180,7 +180,7 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
               .slice(0, 8)
               .map((tool) => (
                 <div key={tool.tool_name} className="text-center rounded-lg bg-zinc-900 p-2 min-w-0">
-                  <p className="text-[9px] text-zinc-500 truncate" title={tool.tool_name}>
+                  <p className="text-xs text-zinc-500 truncate" title={tool.tool_name}>
                     {nameOf(tool.tool_name)}
                   </p>
                   <p className={`text-sm font-bold mt-0.5 ${tool.avg_duration_ms > 5000 ? "text-amber-400" : "text-zinc-300"}`}>

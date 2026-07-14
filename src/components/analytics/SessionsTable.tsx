@@ -62,7 +62,7 @@ export function SessionsTable({ data, loading, sort, onSort, page, onPageChange 
 
   return (
     <div>
-      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_80px] gap-2 px-3 py-2 text-[9px] font-semibold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">
+      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_80px] gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">
         {COLUMNS.map((col) => (
           <button
             key={col.key}
@@ -78,7 +78,7 @@ export function SessionsTable({ data, loading, sort, onSort, page, onPageChange 
       </div>
 
       {data.length === 0 ? (
-        <p className="text-center text-xs text-zinc-600 py-8">No sessions in this period</p>
+        <p className="text-center text-sm text-zinc-600 py-8">No sessions in this period</p>
       ) : (
         data.map((session) => {
           const entryLabel = session.entrypoint === "claude-desktop" ? "Desktop"
@@ -88,18 +88,18 @@ export function SessionsTable({ data, loading, sort, onSort, page, onPageChange 
           return (
             <div
               key={session.session_id}
-              className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_80px] gap-2 px-3 py-2 text-[11px] border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors items-center"
+              className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_80px] gap-2 px-3 py-2 text-sm border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors items-center"
             >
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-zinc-200 font-medium truncate">{session.project || session.session_id.slice(0, 8)}</span>
-                <span className="flex-shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-500">{entryLabel}</span>
+                <span className="flex-shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-500">{entryLabel}</span>
               </div>
-              <div className="text-zinc-400 font-mono text-[10px]">{formatDuration(session.duration_ms)}</div>
-              <div className="text-zinc-400 font-mono text-[10px]">{formatTokens(session.total_tokens)}</div>
-              <div className="text-emerald-400 font-mono text-[10px] font-semibold">${session.cost.toFixed(2)}</div>
-              <div className="text-zinc-400 font-mono text-[10px]">{session.tool_count}</div>
+              <div className="text-zinc-400 font-mono text-sm">{formatDuration(session.duration_ms)}</div>
+              <div className="text-zinc-400 font-mono text-sm">{formatTokens(session.total_tokens)}</div>
+              <div className="text-emerald-400 font-mono text-sm font-semibold">${session.cost.toFixed(2)}</div>
+              <div className="text-zinc-400 font-mono text-sm">{session.tool_count}</div>
               <div>
-                <span className={`inline-block rounded-full px-2 py-0.5 text-[9px] font-medium ${STATUS_STYLES[session.status] || STATUS_STYLES.completed}`}>
+                <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[session.status] || STATUS_STYLES.completed}`}>
                   {session.status}
                 </span>
               </div>
@@ -112,15 +112,15 @@ export function SessionsTable({ data, loading, sort, onSort, page, onPageChange 
         <button
           onClick={() => onPageChange(Math.max(0, page - 1))}
           disabled={page === 0}
-          className="rounded px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200 disabled:text-zinc-700 disabled:cursor-not-allowed"
+          className="rounded px-2 py-1 text-sm text-zinc-400 hover:text-zinc-200 disabled:text-zinc-700 disabled:cursor-not-allowed"
         >
           Previous
         </button>
-        <span className="text-[10px] text-zinc-600">Page {page + 1}</span>
+        <span className="text-sm text-zinc-600">Page {page + 1}</span>
         <button
           onClick={() => onPageChange(page + 1)}
           disabled={data.length < 20}
-          className="rounded px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200 disabled:text-zinc-700 disabled:cursor-not-allowed"
+          className="rounded px-2 py-1 text-sm text-zinc-400 hover:text-zinc-200 disabled:text-zinc-700 disabled:cursor-not-allowed"
         >
           Next
         </button>

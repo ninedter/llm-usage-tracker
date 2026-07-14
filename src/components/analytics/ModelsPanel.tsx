@@ -55,7 +55,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
   return (
     <div className="p-3 space-y-4">
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-        <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-3">Cost by Model</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Cost by Model</p>
         <div className="flex items-center gap-6">
           <svg width="120" height="120" viewBox="0 0 42 42" className="flex-shrink-0">
             {segments.map((seg, i) => (
@@ -69,10 +69,10 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
                 strokeDashoffset={seg.offset}
               />
             ))}
-            <text x="21" y="20" textAnchor="middle" fontSize="5" fill="#f4f4f5" fontWeight="700">
+            <text x="21" y="20" textAnchor="middle" fontSize="5.5" fill="#f4f4f5" fontWeight="700">
               ${totalCost.toFixed(2)}
             </text>
-            <text x="21" y="25" textAnchor="middle" fontSize="3" fill="#71717a">
+            <text x="21" y="25.5" textAnchor="middle" fontSize="4" fill="#71717a">
               total
             </text>
           </svg>
@@ -81,9 +81,9 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
               <div key={seg.model} className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-sm" style={{ background: seg.color }} />
-                  <span className="text-[10px] text-zinc-200">{shortModelName(seg.model)}</span>
+                  <span className="text-sm text-zinc-200">{shortModelName(seg.model)}</span>
                 </div>
-                <span className="text-[10px] font-mono font-semibold" style={{ color: seg.color }}>
+                <span className="text-sm font-mono font-semibold" style={{ color: seg.color }}>
                   ${seg.cost.toFixed(2)}
                 </span>
               </div>
@@ -93,7 +93,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
       </div>
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-        <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Token Breakdown</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Token Breakdown</p>
         <div className="space-y-3">
           {models.map((m, i) => {
             const total = m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens;
@@ -107,8 +107,8 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
             return (
               <div key={m.model}>
                 <div className="flex justify-between mb-1">
-                  <span className="text-[9px] text-zinc-200">{shortModelName(m.model)}</span>
-                  <span className="text-[8px] text-zinc-500 font-mono">{formatTokens(total)} total</span>
+                  <span className="text-xs text-zinc-200">{shortModelName(m.model)}</span>
+                  <span className="text-xs text-zinc-500 font-mono">{formatTokens(total)} total</span>
                 </div>
                 <div className="h-2 flex rounded-full overflow-hidden gap-px">
                   {parts.map((part) => {
@@ -131,7 +131,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
             );
           })}
         </div>
-        <div className="flex gap-3 mt-2 text-[7px] text-zinc-600">
+        <div className="flex gap-3 mt-2 text-xs text-zinc-600">
           <span>Input</span>
           <span style={{ opacity: 0.8 }}>Output</span>
           <span style={{ opacity: 0.5 }}>Cache Read</span>
@@ -141,7 +141,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
 
       {trendDates.length > 0 && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Usage Over Time</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Usage Over Time</p>
           <div className="flex items-end gap-1" style={{ height: 80 }}>
             {trendDates.map((date) => {
               const dayData = trend.filter((t) => t.date === date);
@@ -166,7 +166,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
                       );
                     })}
                   </div>
-                  <span className={`text-[7px] ${isToday ? "text-violet-400" : "text-zinc-700"}`}>
+                  <span className={`text-xs ${isToday ? "text-violet-400" : "text-zinc-700"}`}>
                     {new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "narrow" })}
                   </span>
                 </div>
@@ -177,7 +177,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
       )}
 
       {models.length === 0 && (
-        <p className="text-center text-xs text-zinc-600 py-8">No model usage data in this period</p>
+        <p className="text-center text-sm text-zinc-600 py-8">No model usage data in this period</p>
       )}
     </div>
   );

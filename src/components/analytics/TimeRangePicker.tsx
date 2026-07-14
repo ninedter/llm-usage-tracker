@@ -39,7 +39,7 @@ export function TimeRangePicker({ preset, onPresetChange, onCustomRange }: TimeR
           <button
             key={value}
             onClick={() => onPresetChange(value)}
-            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
               preset === value && !showCustom
                 ? "bg-zinc-600 text-zinc-100"
                 : "text-zinc-400 hover:text-zinc-200"
@@ -52,7 +52,7 @@ export function TimeRangePicker({ preset, onPresetChange, onCustomRange }: TimeR
       <div className="relative">
         <button
           onClick={() => setShowCustom(!showCustom)}
-          className={`rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs font-medium transition-colors ${
+          className={`rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1 text-sm font-medium transition-colors ${
             showCustom ? "text-zinc-100" : "text-zinc-400 hover:text-zinc-200"
           }`}
         >
@@ -67,18 +67,18 @@ export function TimeRangePicker({ preset, onPresetChange, onCustomRange }: TimeR
                   type="date"
                   value={fromDate}
                   onChange={(e) => setFromDate(e.target.value)}
-                  className="rounded border border-zinc-600 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+                  className="rounded border border-zinc-600 bg-zinc-900 px-2 py-1 text-sm text-zinc-200"
                 />
-                <span className="text-xs text-zinc-500">to</span>
+                <span className="text-sm text-zinc-500">to</span>
                 <input
                   type="date"
                   value={toDate}
                   onChange={(e) => setToDate(e.target.value)}
-                  className="rounded border border-zinc-600 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+                  className="rounded border border-zinc-600 bg-zinc-900 px-2 py-1 text-sm text-zinc-200"
                 />
                 <button
                   onClick={handleApplyCustom}
-                  className="rounded bg-violet-600 px-3 py-1 text-xs font-medium text-white hover:bg-violet-500"
+                  className="rounded bg-violet-600 px-3 py-1 text-sm font-medium text-white hover:bg-violet-500"
                 >
                   Apply
                 </button>

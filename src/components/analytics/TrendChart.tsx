@@ -28,7 +28,7 @@ export function TrendChart({ data, loading }: TrendChartProps) {
   if (data.length === 0) {
     return (
       <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-        <p className="text-xs text-zinc-600 text-center py-8">No trend data for this period</p>
+        <p className="text-sm text-zinc-600 text-center py-8">No trend data for this period</p>
       </div>
     );
   }
@@ -46,10 +46,10 @@ export function TrendChart({ data, loading }: TrendChartProps) {
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
       <div className="flex items-center justify-between mb-3">
-        <p className="text-xs font-semibold text-zinc-200">
+        <p className="text-sm font-semibold text-zinc-200">
           {hasCostData ? "Cost & Token Trend" : "Activity Trend"}
         </p>
-        <div className="flex items-center gap-3 text-[10px]">
+        <div className="flex items-center gap-3 text-sm">
           {hasCostData && (
             <span className="flex items-center gap-1">
               <span className="inline-block h-2 w-2 rounded-sm bg-emerald-500" />
@@ -80,7 +80,7 @@ export function TrendChart({ data, loading }: TrendChartProps) {
           return (
             <div key={point.date} className="flex-1 min-w-0 flex flex-col items-center gap-0.5 group relative">
               <div className="absolute bottom-full mb-2 hidden group-hover:block z-10 pointer-events-none">
-                <div className="rounded-md bg-zinc-700 px-2 py-1 text-[9px] text-zinc-200 whitespace-nowrap shadow-lg">
+                <div className="rounded-md bg-zinc-700 px-2 py-1 text-xs text-zinc-200 whitespace-nowrap shadow-lg">
                   <p className="font-medium">{hourly ? point.date.replace("T", " ") : point.date}</p>
                   {hasCostData && <p className="text-emerald-300">${point.cost.toFixed(2)}</p>}
                   <p className="text-blue-300">{activity.toLocaleString()} {hasCostData ? "tokens" : "events"}</p>
@@ -106,20 +106,20 @@ export function TrendChart({ data, loading }: TrendChartProps) {
                 )}
               </div>
               {point.sessions > 0 ? (
-                <span className={`text-[8px] font-mono leading-none ${isToday ? "text-violet-300" : "text-violet-400/80"}`}>
+                <span className={`text-xs font-mono leading-none ${isToday ? "text-violet-300" : "text-violet-400/80"}`}>
                   {point.sessions}
                 </span>
               ) : (
-                <span className="text-[8px] leading-none text-transparent select-none">0</span>
+                <span className="text-xs leading-none text-transparent select-none">0</span>
               )}
-              <span className={`text-[8px] truncate max-w-full ${isToday ? "text-violet-400 font-medium" : "text-zinc-600"} ${showLabel ? "" : "invisible"}`}>
+              <span className={`text-xs truncate max-w-full ${isToday ? "text-violet-400 font-medium" : "text-zinc-600"} ${showLabel ? "" : "invisible"}`}>
                 {label}
               </span>
             </div>
           );
         })}
       </div>
-      <p className="mt-1.5 text-right text-[8px] text-zinc-600">
+      <p className="mt-1.5 text-right text-xs text-zinc-600">
         Numbers under bars = sessions started that {hourly ? "hour" : "day"}
       </p>
     </div>

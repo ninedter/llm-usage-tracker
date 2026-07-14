@@ -6,11 +6,12 @@ import { useMonitorSettings, type MonitorFontSize } from "@/hooks/use-monitor-se
 import { CredentialForm } from "@/components/settings/CredentialForm";
 import { ProviderStatus } from "@/components/settings/ProviderStatus";
 
+// Mirrors the FONT_CLASSES "base" tier so the preview matches the real panel
 const FONT_PREVIEW: Record<MonitorFontSize, string> = {
-  xs: "text-[9px]",
-  sm: "text-[10px]",
-  md: "text-xs",
-  lg: "text-sm",
+  xs: "text-sm",
+  sm: "text-sm",
+  md: "text-base",
+  lg: "text-lg",
 };
 
 export default function SettingsPage() {
@@ -83,7 +84,7 @@ export default function SettingsPage() {
 
           {/* Preview */}
           <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
               Preview
             </p>
             <div className="rounded-md border border-zinc-700 bg-zinc-900 p-3">
@@ -92,7 +93,7 @@ export default function SettingsPage() {
                 <span className={`${FONT_PREVIEW[fontSize]} font-medium text-zinc-100`}>
                   llm-usage-tracker
                 </span>
-                <span className={`rounded-full bg-zinc-800 px-1.5 py-0.5 ${fontSize === "xs" ? "text-[8px]" : fontSize === "sm" ? "text-[9px]" : fontSize === "md" ? "text-[10px]" : "text-[11px]"} font-medium text-zinc-500`}>
+                <span className={`rounded-full bg-zinc-800 px-1.5 py-0.5 ${fontSize === "xs" ? "text-[11px]" : fontSize === "lg" ? "text-sm" : "text-xs"} font-medium text-zinc-500`}>
                   main
                 </span>
               </div>

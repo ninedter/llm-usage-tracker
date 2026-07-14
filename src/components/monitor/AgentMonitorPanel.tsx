@@ -223,18 +223,18 @@ export function AgentMonitorPanel() {
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowFontMenu(false)} />
                   <div className="absolute right-0 top-full z-50 mt-1 rounded-lg border border-zinc-700 bg-zinc-800 py-1 shadow-xl min-w-[120px]">
-                    <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Font Size</p>
+                    <p className="px-3 py-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Font Size</p>
                     {fontSizeOptions.map(({ value, label }) => (
                       <button
                         key={value}
                         onClick={() => { setFontSize(value); setShowFontMenu(false); }}
-                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors ${
                           fontSize === value
                             ? "bg-zinc-700 text-zinc-100"
                             : "text-zinc-400 hover:bg-zinc-700/50 hover:text-zinc-200"
                         }`}
                       >
-                        <span className="w-5 text-center font-mono text-[10px] text-zinc-500">{FONT_SIZE_ICONS[value]}</span>
+                        <span className="w-5 text-center font-mono text-xs text-zinc-500">{FONT_SIZE_ICONS[value]}</span>
                         {label}
                         {fontSize === value && (
                           <svg className="ml-auto h-3 w-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -262,19 +262,19 @@ export function AgentMonitorPanel() {
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowClearConfirm(false)} />
                   <div className="absolute right-0 top-full z-50 mt-1 rounded-lg border border-zinc-700 bg-zinc-800 p-3 shadow-xl min-w-[200px]">
-                    <p className="text-xs font-medium text-zinc-200 mb-1">Clear all monitor data?</p>
-                    <p className="text-[10px] text-zinc-500 mb-3">This will delete all sessions, agents, and events. This cannot be undone.</p>
+                    <p className="text-sm font-medium text-zinc-200 mb-1">Clear all monitor data?</p>
+                    <p className="text-xs text-zinc-500 mb-3">This will delete all sessions, agents, and events. This cannot be undone.</p>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={handleClearData}
                         disabled={clearing}
-                        className="rounded-md bg-red-600 px-3 py-1 text-[11px] font-medium text-white hover:bg-red-500 disabled:opacity-50 transition-colors"
+                        className="rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50 transition-colors"
                       >
                         {clearing ? "Clearing..." : "Clear All"}
                       </button>
                       <button
                         onClick={() => setShowClearConfirm(false)}
-                        className="rounded-md px-3 py-1 text-[11px] font-medium text-zinc-400 hover:text-zinc-200 transition-colors"
+                        className="rounded-md px-3 py-1 text-xs font-medium text-zinc-400 hover:text-zinc-200 transition-colors"
                       >
                         Cancel
                       </button>

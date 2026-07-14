@@ -14,52 +14,54 @@ const FONT_SIZE_LABELS: Record<MonitorFontSize, string> = {
   lg: "Large",
 };
 
-// CSS class mappings for each font size tier
+// CSS class mappings for each font size tier. Readability floor: even the
+// "xs" tier bottoms out at 11px, and the default "sm" tier never goes below
+// 12px (text-xs) with feed body text at 14px (text-sm).
 export const FONT_CLASSES: Record<MonitorFontSize, {
-  /** 9px equivalent */
+  /** 11-14px equivalent — smallest labels/badges */
   tiny: string;
-  /** 10px equivalent */
+  /** 12-14px equivalent — timestamps, event labels */
   micro: string;
-  /** 11px equivalent */
+  /** 12-16px equivalent — summaries, secondary lines */
   small: string;
-  /** 12px / xs equivalent */
+  /** 14-18px equivalent — primary body text */
   base: string;
-  /** 13-14px / sm equivalent */
+  /** 14-20px label */
   label: string;
-  /** 14-16px heading */
+  /** 16-24px heading */
   heading: string;
 }> = {
   xs: {
-    tiny: "text-[8px]",
-    micro: "text-[9px]",
-    small: "text-[10px]",
-    base: "text-[11px]",
-    label: "text-xs",
-    heading: "text-sm",
-  },
-  sm: {
-    tiny: "text-[9px]",
-    micro: "text-[10px]",
-    small: "text-[11px]",
-    base: "text-xs",
-    label: "text-sm",
-    heading: "text-sm",
-  },
-  md: {
-    tiny: "text-[10px]",
-    micro: "text-[11px]",
+    tiny: "text-[11px]",
+    micro: "text-xs",
     small: "text-xs",
     base: "text-sm",
     label: "text-sm",
     heading: "text-base",
   },
-  lg: {
-    tiny: "text-[11px]",
+  sm: {
+    tiny: "text-xs",
     micro: "text-xs",
     small: "text-sm",
     base: "text-sm",
     label: "text-base",
     heading: "text-lg",
+  },
+  md: {
+    tiny: "text-xs",
+    micro: "text-sm",
+    small: "text-sm",
+    base: "text-base",
+    label: "text-lg",
+    heading: "text-xl",
+  },
+  lg: {
+    tiny: "text-sm",
+    micro: "text-sm",
+    small: "text-base",
+    base: "text-lg",
+    label: "text-xl",
+    heading: "text-2xl",
   },
 };
 

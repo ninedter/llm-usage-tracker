@@ -112,7 +112,7 @@ export default function MonitorPage() {
                 <div className="mb-2 flex items-center gap-2">
                   <span className={`h-2 w-2 rounded-full ${working ? "bg-emerald-500 animate-pulse" : "bg-zinc-600"}`} />
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Session {sessionId.slice(0, 8)}</h3>
-                  <span className="text-[10px] text-zinc-600">{filtered.length} agent{filtered.length !== 1 ? "s" : ""}</span>
+                  <span className="text-xs text-zinc-600">{filtered.length} agent{filtered.length !== 1 ? "s" : ""}</span>
                 </div>
                 <div className="space-y-2 pl-4 border-l border-zinc-800">
                   {filtered.map((agent) => (
@@ -137,7 +137,7 @@ function StatCard({ label, value, color = "zinc" }: { label: string; value: numb
   const colors: Record<string, string> = { emerald: "text-emerald-400", red: "text-red-400", zinc: "text-zinc-100" };
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">{label}</p>
+      <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{label}</p>
       <p className={`mt-1 text-2xl font-bold ${colors[color] || colors.zinc}`}>{value}</p>
     </div>
   );

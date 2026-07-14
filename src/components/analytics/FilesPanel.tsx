@@ -55,13 +55,13 @@ export function FilesPanel({ data, loading }: FilesPanelProps) {
     <div className="p-3 space-y-4">
       {directories.length > 0 && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Modification Heatmap</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Modification Heatmap</p>
           <div className="space-y-2">
             {directories.slice(0, 10).map((dir) => {
               const dirFiles = files.filter((f) => f.directory === dir.directory);
               return (
                 <div key={dir.directory}>
-                  <p className="text-[8px] text-zinc-600 mb-1">{dir.directory}/</p>
+                  <p className="text-xs text-zinc-600 mb-1">{dir.directory}/</p>
                   <div className="flex gap-1 pl-2 flex-wrap">
                     {dirFiles.map((f) => (
                       <div
@@ -76,7 +76,7 @@ export function FilesPanel({ data, loading }: FilesPanelProps) {
               );
             })}
           </div>
-          <div className="flex items-center gap-1 mt-3 text-[7px] text-zinc-600">
+          <div className="flex items-center gap-1 mt-3 text-xs text-zinc-600">
             <span>Less</span>
             <div className="w-2.5 h-2.5 rounded bg-violet-900/60" />
             <div className="w-2.5 h-2.5 rounded bg-violet-800" />
@@ -88,7 +88,7 @@ export function FilesPanel({ data, loading }: FilesPanelProps) {
       )}
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-        <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Most Modified Files</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Most Modified Files</p>
         <div className="space-y-1">
           {files.slice(0, 10).map((f, i) => (
             <button
@@ -98,12 +98,12 @@ export function FilesPanel({ data, loading }: FilesPanelProps) {
                 activeFile?.file_path === f.file_path ? "bg-zinc-800" : "hover:bg-zinc-800/50"
               }`}
             >
-              <span className="text-[9px] text-violet-400 font-semibold w-4">{i + 1}</span>
-              <span className="text-[9px] text-zinc-200 font-mono flex-1 truncate">{f.file_name}</span>
-              <span className="text-[8px] text-zinc-600 font-mono">{f.modification_count}</span>
+              <span className="text-xs text-violet-400 font-semibold w-4">{i + 1}</span>
+              <span className="text-xs text-zinc-200 font-mono flex-1 truncate">{f.file_name}</span>
+              <span className="text-xs text-zinc-600 font-mono">{f.modification_count}</span>
               <div className="flex gap-1">
                 {f.tools_used.slice(0, 3).map((tool) => (
-                  <span key={tool} className={`text-[7px] rounded px-1 py-0.5 ${TOOL_BADGE_COLORS[tool] || "text-zinc-400 bg-zinc-500/10"}`}>
+                  <span key={tool} className={`text-xs rounded px-1 py-0.5 ${TOOL_BADGE_COLORS[tool] || "text-zinc-400 bg-zinc-500/10"}`}>
                     {tool}
                   </span>
                 ))}
@@ -115,8 +115,8 @@ export function FilesPanel({ data, loading }: FilesPanelProps) {
 
       {activeFile && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-1">Tool Breakdown</p>
-          <p className="text-[8px] text-zinc-400 font-mono mb-2">{activeFile.file_name}</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1">Tool Breakdown</p>
+          <p className="text-xs text-zinc-400 font-mono mb-2">{activeFile.file_name}</p>
           <div className="h-2.5 flex rounded-full overflow-hidden gap-px">
             {Object.entries(activeFile.tool_breakdown).map(([tool, count]) => {
               const pct = (count / activeFile.modification_count) * 100;
@@ -130,7 +130,7 @@ export function FilesPanel({ data, loading }: FilesPanelProps) {
               );
             })}
           </div>
-          <div className="flex gap-2 mt-2 text-[7px] text-zinc-600 flex-wrap">
+          <div className="flex gap-2 mt-2 text-xs text-zinc-600 flex-wrap">
             {Object.entries(activeFile.tool_breakdown).map(([tool, count]) => (
               <span key={tool}>
                 <span className={`inline-block w-1.5 h-1.5 rounded-sm mr-0.5 ${TOOL_BAR_COLORS[tool] || "bg-zinc-500"}`} />
@@ -142,7 +142,7 @@ export function FilesPanel({ data, loading }: FilesPanelProps) {
       )}
 
       {files.length === 0 && (
-        <p className="text-center text-xs text-zinc-600 py-8">No file modifications recorded in this period</p>
+        <p className="text-center text-sm text-zinc-600 py-8">No file modifications recorded in this period</p>
       )}
     </div>
   );

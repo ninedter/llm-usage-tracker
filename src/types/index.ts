@@ -64,10 +64,20 @@ export interface OpenAIRateWindow {
   level: UsageLevel;
 }
 
+// A granted rate-limit reset credit (spent to clear a hit limit early)
+export interface OpenAIResetCredit {
+  id: string;
+  title: string;
+  expiresAt: string | null;
+}
+
 export interface OpenAIUsageData {
   planType: string;
   windows: OpenAIRateWindow[];
   featureLimits: OpenAIRateWindow[];
+  // Rate-limit reset credits (null when the plan doesn't expose them)
+  resetCreditsAvailable: number | null;
+  resetCredits: OpenAIResetCredit[];
   lastUpdated: string;
 }
 

@@ -49,7 +49,7 @@ export function InsightsPanel({ data, loading }: InsightsPanelProps) {
   const hasActivity = heatmap.length > 0 || projects.some((p) => p.events > 0);
 
   if (!hasActivity) {
-    return <p className="text-xs text-zinc-600 text-center py-10">No activity in this period</p>;
+    return <p className="text-sm text-zinc-600 text-center py-10">No activity in this period</p>;
   }
 
   const cellMap = new Map(heatmap.map((c) => [`${c.dow}-${c.hour}`, c.events]));
@@ -105,9 +105,9 @@ export function InsightsPanel({ data, loading }: InsightsPanelProps) {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {statCards.map((card) => (
           <div key={card.label} className="rounded-lg border border-zinc-800 bg-zinc-950 p-2.5 min-w-0">
-            <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500">{card.label}</p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{card.label}</p>
             <p className="mt-1 text-sm font-bold text-zinc-200 truncate" title={card.value}>{card.value}</p>
-            {card.sub && <p className="text-[9px] text-zinc-600 truncate">{card.sub}</p>}
+            {card.sub && <p className="text-xs text-zinc-600 truncate">{card.sub}</p>}
           </div>
         ))}
       </div>
@@ -115,8 +115,8 @@ export function InsightsPanel({ data, loading }: InsightsPanelProps) {
       {/* Activity heatmap */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500">Activity Heatmap</p>
-          <div className="flex items-center gap-1 text-[8px] text-zinc-600">
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Activity Heatmap</p>
+          <div className="flex items-center gap-1 text-xs text-zinc-600">
             <span>less</span>
             {[0, 0.25, 0.5, 0.75, 1].map((v) => (
               <span key={v} className="inline-block h-2 w-2 rounded-[2px]" style={{ backgroundColor: heatColor(v) }} />
@@ -128,7 +128,7 @@ export function InsightsPanel({ data, loading }: InsightsPanelProps) {
           <div className="min-w-[560px]">
             {DAY_ORDER.map((dow) => (
               <div key={dow} className="flex items-center gap-1 mb-1">
-                <span className="text-[8px] text-zinc-500 font-mono w-7 shrink-0 text-right">{DAY_LABELS[dow]}</span>
+                <span className="text-xs text-zinc-500 font-mono w-7 shrink-0 text-right">{DAY_LABELS[dow]}</span>
                 <div className="flex flex-1 gap-[3px]">
                   {Array.from({ length: 24 }, (_, hour) => {
                     const n = cellMap.get(`${dow}-${hour}`) || 0;
@@ -148,7 +148,7 @@ export function InsightsPanel({ data, loading }: InsightsPanelProps) {
               <span className="w-7 shrink-0" />
               <div className="flex flex-1 gap-[3px]">
                 {Array.from({ length: 24 }, (_, hour) => (
-                  <span key={hour} className="flex-1 text-center text-[7px] text-zinc-600 font-mono">
+                  <span key={hour} className="flex-1 text-center text-xs text-zinc-600 font-mono">
                     {hour % 3 === 0 ? String(hour).padStart(2, "0") : ""}
                   </span>
                 ))}
@@ -161,13 +161,13 @@ export function InsightsPanel({ data, loading }: InsightsPanelProps) {
       {/* Project breakdown */}
       {projects.length > 0 && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">Activity by Project</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Activity by Project</p>
           <div className="space-y-1.5">
             {projects.map((p) => {
               const name = p.project || "(no project)";
               return (
                 <div key={name} className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-400 font-mono w-36 shrink-0 text-right truncate" title={name}>
+                  <span className="text-sm text-zinc-400 font-mono w-36 shrink-0 text-right truncate" title={name}>
                     {name}
                   </span>
                   <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
@@ -176,10 +176,10 @@ export function InsightsPanel({ data, loading }: InsightsPanelProps) {
                       style={{ width: `${(p.events / maxProjectEvents) * 100}%` }}
                     />
                   </div>
-                  <span className="text-[10px] text-zinc-600 font-mono w-14 shrink-0 text-right" title="events">
+                  <span className="text-sm text-zinc-600 font-mono w-14 shrink-0 text-right" title="events">
                     {p.events.toLocaleString()}
                   </span>
-                  <span className="text-[9px] text-zinc-600 font-mono w-20 shrink-0 text-right">
+                  <span className="text-xs text-zinc-600 font-mono w-20 shrink-0 text-right">
                     {p.sessions} sess · {p.active_days}d
                   </span>
                 </div>

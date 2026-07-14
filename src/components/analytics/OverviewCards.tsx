@@ -36,6 +36,13 @@ export function OverviewCards({ data, loading }: OverviewCardsProps) {
   }
 
   const hasTokenData = data.total_input_tokens + data.total_output_tokens > 0;
+  const failedCalls = Math.round(
+    (data.tool_call_count * (100 - data.tool_success_rate)) / 100
+  );
+  const callsPerSession =
+    data.session_count > 0
+      ? Math.round(data.tool_call_count / data.session_count)
+      : data.tool_call_count;
 
   const cards = [
     hasTokenData
@@ -83,15 +90,20 @@ export function OverviewCards({ data, loading }: OverviewCardsProps) {
       : {
           label: "Success Rate",
           value: `${data.tool_success_rate}%`,
-          sub: `${data.tool_call_count} tool calls`,
-          subColor: data.tool_success_rate >= 95 ? "text-emerald-400" : "text-amber-400",
+          sub: `${failedCalls.toLocaleString()} failed`,
+          subColor: "text-zinc-500",
           valueColor: data.tool_success_rate >= 95 ? "text-emerald-400" : "text-amber-400",
         },
     {
       label: "Tool Calls",
       value: String(data.tool_call_count),
-      sub: `${data.tool_success_rate}% success`,
-      subColor: data.tool_success_rate >= 95 ? "text-emerald-400" : data.tool_success_rate >= 80 ? "text-amber-400" : "text-red-400",
+      // In the token view there's no Success Rate card, so surface the rate
+      // here; in the activity view it would just echo that card, so show
+      // per-session throughput instead.
+      sub: hasTokenData ? `${data.tool_success_rate}% success` : `${callsPerSession.toLocaleString()} per session`,
+      subColor: hasTokenData
+        ? data.tool_success_rate >= 95 ? "text-emerald-400" : data.tool_success_rate >= 80 ? "text-amber-400" : "text-red-400"
+        : "text-zinc-500",
     },
   ];
 
@@ -99,9 +111,9 @@ export function OverviewCards({ data, loading }: OverviewCardsProps) {
     <div className="grid grid-cols-5 gap-3">
       {cards.map((card) => (
         <div key={card.label} className="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500">{card.label}</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{card.label}</p>
           <p className={`mt-1 text-xl font-bold ${card.valueColor || "text-zinc-100"}`}>{card.value}</p>
-          {card.sub && <p className={`mt-0.5 text-[10px] ${card.subColor}`}>{card.sub}</p>}
+          {card.sub && <p className={`mt-0.5 text-sm ${card.subColor}`}>{card.sub}</p>}
         </div>
       ))}
     </div>

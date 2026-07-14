@@ -33,7 +33,7 @@ export default function AnalyticsPage() {
       <div className="titlebar-drag mb-4 flex items-center justify-between pt-2">
         <div>
           <h1 className="text-xl font-bold text-zinc-100">Analytics</h1>
-          <p className="mt-0.5 text-xs text-zinc-500">Usage insights and cost breakdown</p>
+          <p className="mt-0.5 text-sm text-zinc-500">Usage insights and cost breakdown</p>
         </div>
         <div className="titlebar-no-drag flex items-center gap-3">
           <TimeRangePicker
@@ -67,7 +67,7 @@ export default function AnalyticsPage() {
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2.5 text-xs font-semibold transition-colors ${
+              className={`px-4 py-2.5 text-sm font-semibold transition-colors ${
                 activeTab === tab
                   ? "text-zinc-100 border-b-2 border-violet-500 -mb-px"
                   : "text-zinc-500 hover:text-zinc-300"

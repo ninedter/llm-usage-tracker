@@ -10,10 +10,10 @@ export function DashboardGrid() {
   const claudeEnabled = !!health?.claude.connected;
   const openaiEnabled = !!health?.openai?.connected;
 
-  // no h-full: cards stay content-sized so they never stretch with (or get
-  // squeezed by) the viewport-capped column; the column scrolls if short
+  // Claude top-left, OpenAI top-right. No h-full on the grid: the row stays
+  // content-sized so the cards never stretch with the monitor panel below
   return (
-    <div className="grid grid-cols-1 gap-5">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       <ClaudeCard enabled={claudeEnabled} />
       <OpenAICard enabled={openaiEnabled} />
     </div>
