@@ -39,4 +39,22 @@ describe("ttlCache", () => {
     await cache.get("k", compute);
     expect(compute).toHaveBeenCalledTimes(2);
   });
+
+  it("a late rejection does not evict a newer entry for the same key", async () => {
+    vi.useFakeTimers();
+    const cache = ttlCache<number>(1_000);
+    let rejectOld: (e: Error) => void;
+    const oldPromise = cache.get("k", () => new Promise<number>((_, rej) => { rejectOld = rej; }));
+    oldPromise.catch(() => {}); // observe, don't unhandled-reject
+    vi.advanceTimersByTime(1_500); // old entry now past TTL
+    const fresh = vi.fn(async () => 42);
+    const newPromise = cache.get("k", fresh); // installs successor
+    rejectOld!(new Error("late failure"));
+    await Promise.resolve(); // let the catch run
+    const again = cache.get("k", vi.fn(async () => 99)); // must hit the successor, not recompute
+    await expect(newPromise).resolves.toBe(42);
+    await expect(again).resolves.toBe(42);
+    expect(fresh).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
 });

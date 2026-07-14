@@ -99,6 +99,7 @@ export class ClaudeClient {
    */
   private static tokenCache: { value: string | null; at: number } | null = null;
   private static readonly TOKEN_TTL_MS = 5 * 60 * 1000;
+  private static readonly TOKEN_RETRY_TTL_MS = 60_000;
 
   static readClaudeCodeOAuthToken(): string | null {
     const cached = ClaudeClient.tokenCache;
@@ -108,9 +109,25 @@ export class ClaudeClient {
     return value;
   }
 
-  /** Drop the cached token (e.g. after an auth failure) so the next read re-probes. */
+  /**
+   * Drop the cached token entirely (e.g. immediately after the user saves
+   * new credentials) so the very next read re-probes right away.
+   */
   static invalidateTokenCache(): void {
     ClaudeClient.tokenCache = null;
+  }
+
+  /**
+   * After an OAuth failure, don't drop the cached token outright — that would
+   * re-spawn the Keychain probe on every poll while auth stays broken. Keep
+   * the cached value but shorten its remaining life to TOKEN_RETRY_TTL_MS so
+   * the next probe happens in at most a minute.
+   */
+  static markTokenSuspect(): void {
+    const c = ClaudeClient.tokenCache;
+    if (!c) return;
+    const retryAt = Date.now() - ClaudeClient.TOKEN_TTL_MS + ClaudeClient.TOKEN_RETRY_TTL_MS;
+    if (c.at > retryAt) ClaudeClient.tokenCache = { value: c.value, at: retryAt };
   }
 
   private static readTokenUncached(): string | null {
@@ -164,9 +181,11 @@ export class ClaudeClient {
       try {
         usage = await ClaudeClient.fetchOAuthUsage(oauthToken);
       } catch {
-        // Token may be stale/revoked — drop the cache so the next call
-        // re-probes the Keychain instead of reusing a dead token for 5min.
-        ClaudeClient.invalidateTokenCache();
+        // Token may be stale/revoked. Don't invalidate outright — that would
+        // re-spawn the Keychain probe on every poll while auth stays broken.
+        // Mark it suspect so the next probe happens within a minute instead
+        // of waiting out the full 5min TTL.
+        ClaudeClient.markTokenSuspect();
         // Fall back to session key
         usage = await this.fetchSessionUsage();
       }
