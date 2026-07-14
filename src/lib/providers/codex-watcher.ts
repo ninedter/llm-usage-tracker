@@ -7,6 +7,7 @@ import { broadcastEvent } from "@/lib/ws";
 const DAY = 86400000;
 const DEFAULT_INTERVAL_MS = 4000;
 const DEFAULT_BACKFILL_DAYS = 90;
+const FULL_SCAN_INTERVAL_MS = 60_000;
 
 /**
  * Codex CLI's home (CODEX_HOME, else ~/.codex). Returns null when there are no
@@ -59,6 +60,21 @@ export function discoverRolloutFiles(sessionsDir: string, sinceMs: number): stri
     .sort();
 }
 
+// Which directories does this tick need? New rollout files are always created
+// under today's YYYY/MM/DD dir, so between full walks (every 60s, catching
+// clock skew / unusual layouts) a tick only lists today — and yesterday for
+// the first hour after midnight, when a pre-midnight session is still active.
+export function scanDirsForTick(nowMs: number, lastFullScanMs: number): "full" | string[] {
+  if (nowMs - lastFullScanMs >= FULL_SCAN_INTERVAL_MS) return "full";
+  const dirs: string[] = [];
+  const day = (d: Date) =>
+    `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+  const now = new Date(nowMs);
+  dirs.push(day(now));
+  if (now.getHours() === 0) dirs.push(day(new Date(nowMs - 86400000)));
+  return dirs;
+}
+
 /**
  * One sweep: ingest anything new in every in-window rollout file, then retire
  * sessions whose logs have gone quiet.
@@ -66,12 +82,17 @@ export function discoverRolloutFiles(sessionsDir: string, sinceMs: number): stri
  * `broadcast` is off for the initial backfill on purpose — pushing 37k historic
  * events down the SSE channel would swamp the live Activity feed (and the
  * browser) with months-old history pretending to be happening now.
+ *
+ * `opts.files`, when supplied, replaces the full-tree `discoverRolloutFiles`
+ * scan — used by the interval tick to poll only today's (and, briefly after
+ * midnight, yesterday's) day-dir instead of walking the whole sessions tree.
  */
-export function pollOnce(sessionsDir: string, sinceMs = 0, opts?: { broadcast?: boolean }): number {
+export function pollOnce(sessionsDir: string, sinceMs = 0, opts?: { broadcast?: boolean; files?: string[] }): number {
   const broadcast = opts?.broadcast ?? false;
+  const files = opts?.files ?? discoverRolloutFiles(sessionsDir, sinceMs);
 
   let inserted = 0;
-  for (const file of discoverRolloutFiles(sessionsDir, sinceMs)) {
+  for (const file of files) {
     try {
       const res = ingestRolloutFile(
         file,
@@ -122,11 +143,27 @@ export function startCodexWatcher(opts?: { intervalMs?: number; backfillDays?: n
   }
 
   let running = false;
+  let lastFullScan = 0;
+  let knownFiles: string[] = [];
+
   const timer = setInterval(() => {
     if (running) return; // a slow sweep must not overlap itself
     running = true;
     try {
-      pollOnce(sessionsDir, since, { broadcast: true }); // from here on, events really are live
+      // from here on, events really are live
+      const plan = scanDirsForTick(Date.now(), lastFullScan);
+      if (plan === "full") {
+        lastFullScan = Date.now();
+        knownFiles = discoverRolloutFiles(sessionsDir, since);
+        pollOnce(sessionsDir, since, { broadcast: true, files: knownFiles });
+      } else {
+        const todays = plan.flatMap((rel) => discoverRolloutFiles(join(sessionsDir, rel), since));
+        // union with the known set so an already-discovered but still-active
+        // older file keeps getting tailed between full walks
+        const union = Array.from(new Set([...knownFiles, ...todays]));
+        knownFiles = union;
+        pollOnce(sessionsDir, since, { broadcast: true, files: union });
+      }
     } catch (err) {
       console.error("[codex-watcher] poll failed:", err);
     } finally {
