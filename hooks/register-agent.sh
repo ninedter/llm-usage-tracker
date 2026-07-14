@@ -21,7 +21,7 @@ fi
 if [ -n "${MONITOR_URL:-}" ]; then
   curl -s --head --connect-timeout 1 --max-time 2 "${BASE_URL}/../health" >/dev/null 2>&1 || exit 0
 else
-  nc -z "${MONITOR_HOST:-127.0.0.1}" "${MONITOR_PORT:-3123}" 2>/dev/null || exit 0
+  nc -z "${MONITOR_HOST:-127.0.0.1}" "${MONITOR_PORT:-3789}" 2>/dev/null || exit 0
 fi
 
 # Parse args or read from stdin

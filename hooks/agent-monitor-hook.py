@@ -6,6 +6,7 @@ import http.client
 import json
 import os
 import sys
+import threading
 
 
 def read_candidate_ports():
@@ -38,6 +39,17 @@ def post_json(host, port, path, body, timeout, use_https=False):
         conn.getresponse().read()
     finally:
         conn.close()
+
+
+def post_bounded(fn, args, deadline_s):
+    """Run a network post with a hard wall-clock bound. http.client's timeout
+    doesn't cover DNS resolution (getaddrinfo), which can hang on a flaky
+    resolver — and PreToolUse hooks block Claude Code's tool call while we
+    wait. A daemon thread dies with the process, so we exit on deadline no
+    matter what the resolver is doing."""
+    t = threading.Thread(target=fn, args=args, daemon=True)
+    t.start()
+    t.join(deadline_s)
 
 
 def build_body(d):
@@ -174,7 +186,9 @@ def main():
             use_https = u.scheme == "https"
             port = u.port or (443 if use_https else 80)
             try:
-                post_json(u.hostname, port, "/api/monitor/events", body, 5, use_https=use_https)
+                def _post():
+                    post_json(u.hostname, port, "/api/monitor/events", body, 5, use_https=use_https)
+                post_bounded(_post, (), 6.0)
             except Exception:
                 pass
         return
