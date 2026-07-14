@@ -28,9 +28,9 @@ export async function GET(): Promise<NextResponse<ApiResponse<RetentionPolicy>>>
 // PUT /api/monitor/retention — { enabled?, days? }
 export async function PUT(req: NextRequest): Promise<NextResponse<ApiResponse<RetentionPolicy>>> {
   try {
-    const body = await req.json().catch(() => ({}));
+    const body = (await req.json().catch(() => ({}))) || {};
     if (typeof body.enabled === "boolean") setSetting("retention_enabled", body.enabled ? "1" : "0");
-    if (typeof body.days === "number" && body.days > 0) setSetting("retention_days", String(Math.floor(body.days)));
+    if (typeof body.days === "number" && Number.isInteger(body.days) && body.days > 0) setSetting("retention_days", String(body.days));
     return NextResponse.json({ success: true, data: readPolicy() });
   } catch (error) {
     return NextResponse.json(

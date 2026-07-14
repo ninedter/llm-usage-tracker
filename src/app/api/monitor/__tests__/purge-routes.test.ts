@@ -54,4 +54,20 @@ describe("/api/monitor/retention", () => {
     expect(getJson.data.enabled).toBe(true);
     expect(getJson.data.days).toBe(14);
   });
+
+  it("GET returns defaults on a fresh DB", async () => {
+    const json = await (await retentionRoute.GET()).json();
+    expect(json.data).toEqual({ enabled: false, days: 30, last_purge_at: null });
+  });
+
+  it("PUT ignores fractional/invalid days and non-boolean enabled", async () => {
+    const req = new NextRequest("http://x/api/monitor/retention", {
+      method: "PUT",
+      body: JSON.stringify({ days: 0.5, enabled: "yes" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    const json = await (await retentionRoute.PUT(req)).json();
+    expect(json.data.days).toBe(30);       // fractional rejected → stays default, NOT 0
+    expect(json.data.enabled).toBe(false); // non-boolean ignored
+  });
 });
