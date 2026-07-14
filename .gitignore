@@ -61,3 +61,6 @@ AGENTS.md
 
 # subagent-driven-development scratch (briefs, reports, ledger, diffs)
 /.superpowers/
+
+# python bytecode (hook script)
+__pycache__/
