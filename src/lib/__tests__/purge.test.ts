@@ -86,3 +86,34 @@ describe("previewPurge / deleteBefore", () => {
     expect((d.prepare("SELECT COUNT(*) n FROM token_usage").get() as { n: number }).n).toBe(1);
   });
 });
+
+describe("purgeOlderThan / purgeEverything", () => {
+  it("rolls a >92-day-old span into daily_usage before deleting, and keeps the summary", () => {
+    const oldDay = new Date("2026-01-01T12:00:00").getTime();
+    seedSession("old", oldDay);
+    seedTokenUsage("old"); // gives the rollup something to summarize
+    const cutoff = new Date("2026-06-01T00:00:00").getTime(); // ~5 months later (> 92d)
+
+    const res = db.purgeOlderThan(cutoff, { vacuum: false });
+
+    expect(res.deleted.sessions).toBe(1);
+    expect(res.deleted.token_usage).toBe(1);
+    const d = db.getDb();
+    expect((d.prepare("SELECT COUNT(*) n FROM daily_usage").get() as { n: number }).n).toBeGreaterThan(0);
+    expect((d.prepare("SELECT COUNT(*) n FROM sessions").get() as { n: number }).n).toBe(0);
+  });
+
+  it("purgeEverything clears raw tables AND daily_usage but keeps app_settings", () => {
+    seedSession("s", 100);
+    db.getDb().prepare("INSERT INTO daily_usage (date,model,project,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost,session_count,tool_calls,tool_failures) VALUES ('2026-01-01','m','',0,0,0,0,0,0,0,0)").run();
+    db.setSetting("retention_enabled", "1");
+
+    const res = db.purgeEverything({ vacuum: false });
+
+    expect(res.deleted.sessions).toBe(1);
+    expect(res.daily_usage_cleared).toBeGreaterThan(0);
+    const d = db.getDb();
+    expect((d.prepare("SELECT COUNT(*) n FROM daily_usage").get() as { n: number }).n).toBe(0);
+    expect(db.getSetting("retention_enabled")).toBe("1"); // config survives
+  });
+});

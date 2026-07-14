@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { join } from "path";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, statSync } from "fs";
 import type { AgentRecord, AgentEvent, AgentSession, SessionRecord, TokenUsage, MonitorStats } from "@/types";
 
 let db: Database.Database | null = null;
@@ -488,6 +488,52 @@ export function clearAllMonitorData(): { sessions: number; agents: number; event
   const tokenUsage = d.prepare("DELETE FROM token_usage").run().changes;
   const sessions = d.prepare("DELETE FROM sessions").run().changes;
   return { sessions, agents, events, token_usage: tokenUsage };
+}
+
+function dbFileBytes(): number {
+  try { return statSync(getDbPath()).size; } catch { return 0; }
+}
+
+// Roll up [from, to) into daily_usage in <=92-day chunks. rollupDailyUsageRange
+// caps its own scan at 92 days, so a single call over a longer span would skip
+// the oldest slice — chunking guarantees the whole deleted span is summarized.
+function rollupRangeChunked(from: number, to: number): void {
+  const CHUNK = 92 * 86400000;
+  let cursor = from;
+  while (cursor < to) {
+    const end = Math.min(cursor + CHUNK, to);
+    rollupDailyUsageRange(cursor, end);
+    cursor = end;
+  }
+}
+
+// Age-based purge: summarize the deleted span into daily_usage (preserved),
+// delete raw rows before cutoffMs, optionally VACUUM to reclaim file space.
+export function purgeOlderThan(cutoffMs: number, opts?: { vacuum?: boolean }): import("@/types").PurgeResult {
+  const d = getDb();
+  const oldest = (d.prepare("SELECT MIN(started_at) m FROM sessions WHERE started_at < ?").get(cutoffMs) as { m: number | null }).m;
+  if (oldest != null) rollupRangeChunked(oldest, cutoffMs);
+
+  const before = dbFileBytes();
+  const deleted = deleteBefore(cutoffMs);
+  if (opts?.vacuum) d.exec("VACUUM");
+  const after = dbFileBytes();
+  return { deleted, bytes_freed: Math.max(0, before - after) };
+}
+
+// Full wipe: all raw tables plus daily_usage. Keeps app_settings (config).
+export function purgeEverything(opts?: { vacuum?: boolean }): import("@/types").PurgeResult {
+  const d = getDb();
+  const before = dbFileBytes();
+  const raw = clearAllMonitorData();
+  const daily = d.prepare("DELETE FROM daily_usage").run().changes;
+  if (opts?.vacuum) d.exec("VACUUM");
+  const after = dbFileBytes();
+  return {
+    deleted: { sessions: raw.sessions, agents: raw.agents, events: raw.events, token_usage: raw.token_usage },
+    bytes_freed: Math.max(0, before - after),
+    daily_usage_cleared: daily,
+  };
 }
 
 // Abandon stale sessions (idle > 5 minutes)
