@@ -8,7 +8,7 @@ A macOS desktop + always-on Docker application that monitors your AI subscriptio
 ![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-node22--slim-2496ED?logo=docker&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-123%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-133%20passing-brightgreen)
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -21,6 +21,7 @@ A macOS desktop + always-on Docker application that monitors your AI subscriptio
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
 - [Claude Code hook setup](#claude-code-hook-setup)
+- [Claude token usage (transcripts)](#claude-token-usage-transcripts)
 - [OpenAI / Codex tracking](#openai--codex-tracking)
 - [API reference](#api-reference)
 - [Data management & retention](#data-management--retention)
@@ -37,7 +38,9 @@ A macOS desktop + always-on Docker application that monitors your AI subscriptio
 
 **Agent activity tracking.** A tiny hook script forwards every Claude Code lifecycle event (all 7 hook types) to the tracker, and a built-in watcher tails Codex CLI rollout logs. Every session, agent, subagent, tool call, and touched file lands in a local SQLite database and streams live into the UI over SSE.
 
-**Analytics.** Activity trends, tool success rates and latencies, per-file modification hotspots, per-model token/cost series, working-hours heatmaps, streaks, and explore-vs-modify ratios — over any date range, filterable by provider (All / Claude / OpenAI).
+**Token accounting for both providers.** Hook events don't carry token counts, so a second watcher derives Claude's per-model usage (input/output/cache read/cache write) from the transcripts Claude Code writes under `~/.claude/projects` — subagents included — while the Codex ingester reads cumulative totals from rollout logs. Every analytics view has real token data for Claude, OpenAI, and both combined.
+
+**Analytics.** Activity trends, tool success rates and latencies, per-file modification hotspots, per-model token series, working-hours heatmaps, streaks, and explore-vs-modify ratios — over any date range, filterable by provider (All / Claude / OpenAI), with the **same metric set in every scope** so switching the filter compares numbers, not layouts.
 
 **Private by construction.** Everything stays on your machine: a local SQLite file in a Docker named volume, AES-256-GCM-encrypted credentials, no telemetry.
 
@@ -63,13 +66,15 @@ The strip along the top mirrors your quota windows so you can watch usage burn w
 
 ### Analytics — how you actually use AI
 
-Time-range presets (Today / 7d / 30d / All / custom) with an overview row — total cost, session count + average duration, tokens in/out, top model, tool calls + success rate — and an activity trend chart. Five drill-down tabs, each loaded on demand:
+Time-range presets (Today / 7d / 30d / All / custom) and a provider filter (All / Claude / OpenAI) that scopes every panel to the **same five overview cards**: total cost, sessions + average duration, tokens in/out, top model + its share of usage, tool calls + success rate. Below that, a token trend chart (falls back to event counts only when a scope has no token data, and adds a cost series only when there's a real dollar amount). Five drill-down tabs, each loaded on demand:
 
 - **Insights** — active days, current streak, peak hour, busiest day, longest session, events/session, explore-vs-modify ratio (Codex `exec` commands are verb-classified: `cat`/`grep` count as explore, `sed -i`/`mv` as modify), top tool, a day×hour activity heatmap, and a per-project usage table
 - **Sessions** — sortable table (duration, tokens, cost, tool count) with pagination
 - **Tools** — most-used tools, success/failure rates, average tool latency (paired call→result timing)
 - **Files** — most-modified files and directories, with the tools that touched them
-- **Models** — cost and token series per model over time
+- **Models** — usage share per model (by cost when a real cost is tracked, by token volume on flat subscriptions), token breakdown incl. cache read/write, and a per-model daily series
+
+Since both providers here run flat subscriptions (cost $0), "top model" and the model charts rank by token volume — the number that actually moves.
 
 ![Analytics](docs/screenshots/analytics.png)
 
@@ -89,6 +94,7 @@ The design principle: **one canonical database**. The Docker container is the al
 flowchart TB
     subgraph capture [Capture]
         CC["Claude Code<br/>7 hook events"] -->|"hook script<br/>(1 python3 process/event)"| API
+        CT["Claude Code transcripts<br/>~/.claude/projects"] -->|"token watcher<br/>(15s sweep, per-session recompute)"| API
         CX["Codex CLI<br/>~/.codex rollout logs"] -->|"built-in watcher<br/>(4s tail, 60s full scan)"| API
     end
 
@@ -112,7 +118,7 @@ flowchart TB
 - **Port discovery for hooks**: in embedded/dev mode Electron writes its port to a `server-port` file; in thin-client mode the file is deliberately removed so hooks post only to `:3789`. The hook posts to *every* listening instance so no history is lost.
 - **The SQLite DB lives in a Docker named volume** (`llm-tracker-data`) — never a macOS bind mount (see [Troubleshooting](#troubleshooting) for the WAL/mmap story). Use `npm run db:export` for a host-side snapshot.
 
-**Database schema** (7 tables): `sessions`, `agents` (main agents + subagents, parent-linked), `agent_events` (every tool call/result/lifecycle event), `token_usage` (per-session per-model tokens + cost), `daily_usage` (rolled-up daily summaries that survive purges), `codex_ingest` (per-file tail cursors for the Codex watcher), `app_settings`.
+**Database schema** (7 tables): `sessions`, `agents` (main agents + subagents, parent-linked), `agent_events` (every tool call/result/lifecycle event), `token_usage` (per-session per-model tokens + cost, both providers), `daily_usage` (rolled-up daily summaries that survive purges), `codex_ingest` (per-file cursors shared by the Codex and Claude-transcript watchers), `app_settings`.
 
 ## Quick start
 
@@ -129,7 +135,7 @@ docker compose up -d --build
 open http://localhost:3789
 ```
 
-That's the whole tracker: dashboard, monitor, analytics, settings, healthcheck (`docker ps` shows `(healthy)`), automatic restarts, Codex log ingestion (your `~/.codex` is mounted read-only), and a stable `:3789` target for Claude Code hooks — capturing 24/7 whether or not the desktop app is open.
+That's the whole tracker: dashboard, monitor, analytics, settings, healthcheck (`docker ps` shows `(healthy)`), automatic restarts, Codex log ingestion and Claude transcript token ingestion (your `~/.codex` and `~/.claude/projects` are mounted read-only), and a stable `:3789` target for Claude Code hooks — capturing 24/7 whether or not the desktop app is open.
 
 ### 2. The desktop app (optional)
 
@@ -146,7 +152,7 @@ Install the DMG (or run `npx electron .` after a build). The app attaches to the
 
 ```bash
 npm run dev            # Next.js dev server (UI + API) on :3000
-npm test               # vitest — 123 tests
+npm test               # vitest — 133 tests
 npm run electron:dev   # hot-reload Next.js + Electron shell
 ```
 
@@ -173,6 +179,17 @@ Register it in `~/.claude/settings.json` (adjust the path to your checkout):
 What each event becomes: `PreToolUse` → a `tool_call` (or `subagent_start` when the Agent tool spawns a subagent, with its type and description), `PostToolUse` → `tool_result`, `Stop` → the agent going idle, `SubagentStop` → subagent completion, `SessionStart`/`SessionEnd` → session lifecycle, `Notification` → notifications with context-compaction detection. File paths are extracted from tool inputs to power the Files analytics.
 
 **Remote/cloud sessions**: set `MONITOR_URL=https://your-tunnel.example.com` in the hook command instead — see `hooks/claude-hooks-config.json` for both variants. A smoke test lives at `hooks/test-hook.sh`.
+
+## Claude token usage (transcripts)
+
+Hook events don't carry token counts, so Claude's token analytics come from a second source: the transcripts Claude Code writes under `~/.claude/projects`. A built-in watcher (15 s sweep, cursors persisted in the DB) recomputes a session's per-model totals whenever its transcript bytes change — no hook setup involved:
+
+- **Session groups** — one session is `<uuid>.jsonl` plus everything under `<uuid>/subagents/**` (Task agents, workflow journals). Every line in those files carries the parent session id, so subagent usage rolls up into its session — and the ids match the ones the hooks report, so tokens attach to the sessions you already see in the monitor.
+- **Exact accounting** — streaming repeats a message's `usage` on every content-block line, so usage is deduped per `message.id` (last line wins); each recompute REPLACE-upserts absolute totals, making ingestion idempotent and self-healing by construction.
+- **History included** — first boot backfills the last 90 days (a few seconds for ~500 MB of transcripts; later boots only touch changed sessions). Sessions that predate the tracker get a synthetic completed `sessions` row so their usage still shows up in analytics.
+- **Cost stays $0** — Claude Code runs on a flat subscription, so a dollar figure would be fiction (same policy as Codex). Analytics rank and chart by token volume instead.
+
+One caveat: a `--resume`d session copies its inherited history into a new transcript, so that usage counts again under the new session — transcripts don't carry enough identity to dedupe across sessions.
 
 ## OpenAI / Codex tracking
 
@@ -290,11 +307,12 @@ llm-usage-tracker/
 │   │   ├── exec-classify.ts     # Codex exec verb classification (explore vs modify)
 │   │   ├── credentials.ts       # AES-256-GCM storage
 │   │   └── providers/           # claude-client, openai-client, codex-watcher, codex-ingest,
+│   │                            # claude-watcher + claude-transcript (token ingestion),
 │   │                            # usage-cache (shared 30s TTL)
 │   └── types/
 ├── docs/screenshots/            # README images
 ├── Dockerfile                   # multi-stage; standalone output; HEALTHCHECK /api/live
-├── docker-compose.yml           # :3789, named volume, ~/.codex ro-mount, TZ passthrough
+├── docker-compose.yml           # :3789, named volume, ~/.codex + ~/.claude/projects ro-mounts, TZ passthrough
 └── package.json                 # electron-builder config: standalone ships via extraResources
 ```
 
@@ -303,7 +321,7 @@ llm-usage-tracker/
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Next.js dev server (UI + API + Codex watcher) |
-| `npm test` | vitest suite (123 tests: schema, queries, purge, providers, codex ingest, throttles, SSE) |
+| `npm test` | vitest suite (133 tests: schema, queries, purge, providers, codex ingest, claude transcripts, throttles, SSE) |
 | `npm run build` | Production build (standalone output + static assets) |
 | `npm run electron:dev` | Hot-reload development with the Electron shell |
 | `npm run electron:build` | Clean → build → compile → package DMG + zip |
