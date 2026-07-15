@@ -1,5 +1,5 @@
 {
-  "_comment": "Add these hooks to ~/.claude/settings.json. For local use, set MONITOR_PORT. For cloud/remote sessions, set MONITOR_URL instead.",
+  "_comment": "Add these hooks to ~/.claude/settings.json. For local use no extra variables are needed — the hook auto-discovers the tracker on :3789 (Docker), :3000, and the Electron port file. For cloud/remote sessions, set MONITOR_URL instead.",
 
   "hooks_local": {
     "PreToolUse": [
@@ -8,7 +8,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_HOOK_TYPE=PreToolUse MONITOR_PORT=3123 /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
+            "command": "CLAUDE_HOOK_TYPE=PreToolUse /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
           }
         ]
       }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "CLAUDE_HOOK_TYPE=PostToolUse MONITOR_PORT=3123 /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
+            "command": "CLAUDE_HOOK_TYPE=PostToolUse /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
           }
         ]
       }

@@ -144,6 +144,20 @@ describe("schema: provider column, source_id dedup, codex_ingest", () => {
     expect(count).toBe(1);
   });
 
+  it("sets performance pragmas", () => {
+    const d = getDb();
+    expect(d.pragma("busy_timeout", { simple: true })).toBe(5000);
+    expect(d.pragma("synchronous", { simple: true })).toBe(1); // NORMAL
+  });
+
+  it("has composite hot-path indexes", () => {
+    const d = getDb();
+    const names = (d.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as { name: string }[]).map(r => r.name);
+    expect(names).toContain("idx_events_agent_ts");
+    expect(names).toContain("idx_events_session_ts");
+    expect(names).toContain("idx_agents_parent");
+  });
+
   it("re-running getDb()'s setup against an already-migrated file does not throw (simulates an app restart)", async () => {
     vi.resetModules();
     const fresh = await import("@/lib/db");

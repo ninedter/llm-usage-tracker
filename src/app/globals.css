@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* Tailwind v4's `dark:` variant follows prefers-color-scheme by default, but
+   this app pins <html class="dark"> (dark-first design). Bind the variant to
+   that class, or on a light-mode OS every dark:* utility goes inert while the
+   .dark CSS variables below still blacken the body — dark text on a dark page. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #fafafa;
   --foreground: #171717;

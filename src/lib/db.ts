@@ -6,6 +6,22 @@ import { extractExecCommand, classifyCommand } from "@/lib/exec-classify";
 
 let db: Database.Database | null = null;
 
+// Compiled-statement cache. better-sqlite3 re-parses SQL on every .prepare(),
+// which the event-ingest hot path hits ~8× per hook event. Keyed per open DB:
+// getDb() re-creates the Map when it (re)opens, and vi.resetModules() in tests
+// resets both together.
+let stmtCache = new Map<string, Database.Statement>();
+
+function prep(sql: string): Database.Statement {
+  const d = getDb();
+  let s = stmtCache.get(sql);
+  if (!s) {
+    s = d.prepare(sql);
+    stmtCache.set(sql, s);
+  }
+  return s;
+}
+
 function getDbPath(): string {
   const dataDir = process.env.LLM_DATA_DIR || join(process.cwd(), ".data");
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
@@ -18,6 +34,13 @@ export function getDb(): Database.Database {
   db = new Database(getDbPath());
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // WAL + NORMAL is durable against corruption (a crash can only lose the
+  // last few commits, never corrupt); FULL fsyncs every commit for no benefit
+  // in a usage tracker. busy_timeout covers writer overlap (events POST vs
+  // codex watcher) instead of throwing SQLITE_BUSY.
+  db.pragma("synchronous = NORMAL");
+  db.pragma("busy_timeout = 5000");
+  stmtCache = new Map();
 
   // Create tables
   db.exec(`
@@ -87,6 +110,9 @@ export function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
     CREATE INDEX IF NOT EXISTS idx_agents_session_type_status ON agents(session_id, type, status);
     CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_events_agent_ts ON agent_events(agent_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_events_session_ts ON agent_events(session_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_agents_parent ON agents(parent_agent_id);
 
     CREATE TABLE IF NOT EXISTS daily_usage (
       date              TEXT NOT NULL,
@@ -158,8 +184,7 @@ export function getDb(): Database.Database {
 
 export function createSession(session: Omit<SessionRecord, "updated_at" | "provider">, provider: DbProvider = "anthropic"): SessionRecord {
   const now = Date.now();
-  const d = getDb();
-  d.prepare(`
+  prep(`
     INSERT OR IGNORE INTO sessions (id, status, project, cwd, entrypoint, provider, started_at, ended_at, updated_at, metadata)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(session.id, session.status, session.project, session.cwd, session.entrypoint, provider, session.started_at, session.ended_at, now, session.metadata);
@@ -167,7 +192,7 @@ export function createSession(session: Omit<SessionRecord, "updated_at" | "provi
 }
 
 export function getSession(id: string): SessionRecord | null {
-  return getDb().prepare("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRecord | null;
+  return prep("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRecord | null;
 }
 
 export function updateSession(id: string, updates: Partial<Pick<SessionRecord, "status" | "ended_at" | "metadata">>): SessionRecord | null {
@@ -192,7 +217,7 @@ export function ensureSession(sessionId: string, project?: string, cwd?: string,
       return updateSession(sessionId, { status: "active" }) || existing;
     }
     // Touch updated_at
-    getDb().prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(Date.now(), sessionId);
+    prep("UPDATE sessions SET updated_at = ? WHERE id = ?").run(Date.now(), sessionId);
     return { ...existing, updated_at: Date.now() };
   }
 
@@ -212,8 +237,7 @@ export function ensureSession(sessionId: string, project?: string, cwd?: string,
 
 export function createAgent(agent: Omit<AgentRecord, "created_at">): AgentRecord {
   const now = Date.now();
-  const d = getDb();
-  d.prepare(`
+  prep(`
     INSERT OR IGNORE INTO agents (id, session_id, parent_agent_id, type, subagent_type, description, status, current_tool, started_at, ended_at, metadata, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
@@ -248,7 +272,7 @@ export function getAgent(id: string): AgentRecord | null {
   // Carry the session's provider on every single-agent read: these rows are
   // broadcast over SSE, and the monitor's provider tabs drop agents whose
   // provider is missing.
-  return getDb().prepare(`
+  return prep(`
     SELECT a.*, COALESCE(s.provider, 'anthropic') AS provider
     FROM agents a
     LEFT JOIN sessions s ON s.id = a.session_id
@@ -290,21 +314,21 @@ export function listAgents(filters?: {
 }
 
 export function getAgentChildren(parentId: string): AgentRecord[] {
-  return getDb().prepare(
+  return prep(
     "SELECT * FROM agents WHERE parent_agent_id = ? ORDER BY started_at ASC"
   ).all(parentId) as AgentRecord[];
 }
 
 // Find main agent for a session
 export function getMainAgent(sessionId: string): AgentRecord | null {
-  return getDb().prepare(
+  return prep(
     "SELECT * FROM agents WHERE session_id = ? AND type = 'main' LIMIT 1"
   ).get(sessionId) as AgentRecord | null;
 }
 
 // Find working subagents for matching on SubagentStop
 export function getWorkingSubagents(sessionId: string): AgentRecord[] {
-  return getDb().prepare(
+  return prep(
     "SELECT * FROM agents WHERE session_id = ? AND type = 'subagent' AND status = 'working' ORDER BY started_at ASC"
   ).all(sessionId) as AgentRecord[];
 }
@@ -347,12 +371,13 @@ export function createEvent(
   sourceId: string | null = null
 ): AgentEvent {
   const now = Date.now();
-  const d = getDb();
   // Codex re-ingest passes the same sourceId for an already-seen record, so
   // OR IGNORE lets the partial unique index on source_id silently dedup it.
   // Claude events never pass sourceId, so their insert path is unchanged.
   const insertVerb = sourceId !== null ? "INSERT OR IGNORE" : "INSERT";
-  const result = d.prepare(`
+  // insertVerb has exactly two possible values, so prep()'s cache holds two
+  // compiled statements for this call site — never re-parses on every event.
+  const result = prep(`
     ${insertVerb} INTO agent_events (agent_id, session_id, provider, source_id, event_type, tool_name, summary, content, files_affected, timestamp, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
@@ -367,6 +392,7 @@ export function listEvents(agentId: string, filters?: {
   event_type?: string;
   limit?: number;
   offset?: number;
+  order?: "asc" | "desc";
 }): AgentEvent[] {
   const clauses: string[] = ["agent_id = ?"];
   const values: unknown[] = [agentId];
@@ -375,10 +401,20 @@ export function listEvents(agentId: string, filters?: {
 
   const limit = filters?.limit ?? 500;
   const offset = filters?.offset ?? 0;
+  const order = filters?.order === "desc" ? "DESC" : "ASC";
 
   return getDb().prepare(
-    `SELECT * FROM agent_events WHERE ${clauses.join(" AND ")} ORDER BY timestamp ASC LIMIT ? OFFSET ?`
+    `SELECT * FROM agent_events WHERE ${clauses.join(" AND ")} ORDER BY timestamp ${order} LIMIT ? OFFSET ?`
   ).all(...values, limit, offset) as AgentEvent[];
+}
+
+// Newest events across every agent — hydrates the Activity feed, which would
+// otherwise show only events broadcast over SSE while the page happens to be
+// open (Codex backfill, for one, is never broadcast).
+export function listRecentEvents(limit = 100, provider?: DbProvider): AgentEvent[] {
+  return getDb().prepare(
+    `SELECT * FROM agent_events${provider ? " WHERE provider = ?" : ""} ORDER BY timestamp DESC, id DESC LIMIT ?`
+  ).all(...pArg(provider), limit) as AgentEvent[];
 }
 
 export function listSessionEvents(sessionId: string, filters?: {
@@ -400,13 +436,13 @@ export function listSessionEvents(sessionId: string, filters?: {
 }
 
 export function getRecentEvents(limit = 50): AgentEvent[] {
-  return getDb().prepare(
+  return prep(
     "SELECT * FROM agent_events ORDER BY timestamp DESC LIMIT ?"
   ).all(limit) as AgentEvent[];
 }
 
 export function getLatestEvent(agentId: string): AgentEvent | null {
-  return getDb().prepare(
+  return prep(
     "SELECT * FROM agent_events WHERE agent_id = ? ORDER BY timestamp DESC LIMIT 1"
   ).get(agentId) as AgentEvent | null;
 }
@@ -414,7 +450,7 @@ export function getLatestEvent(agentId: string): AgentEvent | null {
 // --- Token Usage ---
 
 export function upsertTokenUsage(usage: Omit<TokenUsage, "provider">, provider: DbProvider = "anthropic"): void {
-  getDb().prepare(`
+  prep(`
     INSERT INTO token_usage (session_id, model, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id, model) DO UPDATE SET
@@ -429,23 +465,23 @@ export function upsertTokenUsage(usage: Omit<TokenUsage, "provider">, provider: 
 }
 
 export function getSessionTokenUsage(sessionId: string): TokenUsage[] {
-  return getDb().prepare("SELECT * FROM token_usage WHERE session_id = ?").all(sessionId) as TokenUsage[];
+  return prep("SELECT * FROM token_usage WHERE session_id = ?").all(sessionId) as TokenUsage[];
 }
 
 export function getTotalCost(): number {
-  const row = getDb().prepare("SELECT COALESCE(SUM(cost), 0) as total FROM token_usage").get() as { total: number };
+  const row = prep("SELECT COALESCE(SUM(cost), 0) as total FROM token_usage").get() as { total: number };
   return row.total;
 }
 
 // --- Codex Ingest Cursor ---
 
 export function getCodexIngest(filePath: string): CodexIngestRow | null {
-  const row = getDb().prepare("SELECT * FROM codex_ingest WHERE file_path = ?").get(filePath) as CodexIngestRow | undefined;
+  const row = prep("SELECT * FROM codex_ingest WHERE file_path = ?").get(filePath) as CodexIngestRow | undefined;
   return row ?? null;
 }
 
 export function upsertCodexIngest(row: CodexIngestRow): void {
-  getDb().prepare(`
+  prep(`
     INSERT INTO codex_ingest (file_path, byte_offset, thread_id, last_seen_at, status)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(file_path) DO UPDATE SET
@@ -483,7 +519,7 @@ export function listSessions(limit = 50, provider?: DbProvider): AgentSession[] 
 }
 
 export function getSessionAgents(sessionId: string): AgentRecord[] {
-  return getDb().prepare(
+  return prep(
     "SELECT * FROM agents WHERE session_id = ? ORDER BY started_at ASC"
   ).all(sessionId) as AgentRecord[];
 }
@@ -531,12 +567,12 @@ export function getMonitorStats(provider?: DbProvider): MonitorStats {
 // --- App settings (key-value) ---
 
 export function getSetting(key: string): string | null {
-  const row = getDb().prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as { value: string } | undefined;
+  const row = prep("SELECT value FROM app_settings WHERE key = ?").get(key) as { value: string } | undefined;
   return row?.value ?? null;
 }
 
 export function setSetting(key: string, value: string): void {
-  getDb().prepare(`
+  prep(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -547,7 +583,7 @@ export function setSetting(key: string, value: string): void {
 
 export function completeSessionAgents(sessionId: string): void {
   const now = Date.now();
-  getDb().prepare("UPDATE agents SET status = 'completed', ended_at = ? WHERE session_id = ? AND status IN ('working', 'idle')").run(now, sessionId);
+  prep("UPDATE agents SET status = 'completed', ended_at = ? WHERE session_id = ? AND status IN ('working', 'idle')").run(now, sessionId);
 }
 
 // Delete every raw row tied to a session started before an absolute epoch-ms
@@ -555,10 +591,10 @@ export function completeSessionAgents(sessionId: string): void {
 export function deleteBefore(cutoffMs: number): import("@/types").PurgeCounts {
   const d = getDb();
   const run = d.transaction((): import("@/types").PurgeCounts => {
-    const events = d.prepare("DELETE FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
-    const agents = d.prepare("DELETE FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
-    const token_usage = d.prepare("DELETE FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
-    const sessions = d.prepare("DELETE FROM sessions WHERE started_at < ?").run(cutoffMs).changes;
+    const events = prep("DELETE FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const agents = prep("DELETE FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const token_usage = prep("DELETE FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const sessions = prep("DELETE FROM sessions WHERE started_at < ?").run(cutoffMs).changes;
     return { sessions, agents, events, token_usage };
   });
   return run();
@@ -571,8 +607,7 @@ export function deleteOldSessions(olderThanMs: number): number {
 
 // Count what deleteBefore(cutoffMs) would remove — same predicate, no writes.
 export function previewPurge(cutoffMs: number): import("@/types").PurgeCounts {
-  const d = getDb();
-  const one = (sql: string) => (d.prepare(sql).get(cutoffMs) as { n: number }).n;
+  const one = (sql: string) => (prep(sql).get(cutoffMs) as { n: number }).n;
   return {
     sessions: one("SELECT COUNT(*) n FROM sessions WHERE started_at < ?"),
     agents: one("SELECT COUNT(*) n FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
@@ -583,11 +618,10 @@ export function previewPurge(cutoffMs: number): import("@/types").PurgeCounts {
 
 // Clear all monitor data
 export function clearAllMonitorData(): { sessions: number; agents: number; events: number; token_usage: number } {
-  const d = getDb();
-  const events = d.prepare("DELETE FROM agent_events").run().changes;
-  const agents = d.prepare("DELETE FROM agents").run().changes;
-  const tokenUsage = d.prepare("DELETE FROM token_usage").run().changes;
-  const sessions = d.prepare("DELETE FROM sessions").run().changes;
+  const events = prep("DELETE FROM agent_events").run().changes;
+  const agents = prep("DELETE FROM agents").run().changes;
+  const tokenUsage = prep("DELETE FROM token_usage").run().changes;
+  const sessions = prep("DELETE FROM sessions").run().changes;
   return { sessions, agents, events, token_usage: tokenUsage };
 }
 
@@ -606,6 +640,28 @@ function rollupRangeChunked(from: number, to: number): void {
     rollupDailyUsageRange(cursor, end);
     cursor = end;
   }
+}
+
+// Analytics routes call this once per request; identical ranges within the
+// same minute collapse to one real rollup (the 60s cadence matches the SWR
+// refresh interval that generates them).
+const rollupSeen = new Map<string, number>();
+
+export function maybeRollupRange(from: number, to: number, nowMs = Date.now()): boolean {
+  const key = `${from}|${Math.floor(to / 60_000)}`;
+  const last = rollupSeen.get(key) ?? 0;
+  if (nowMs - last < 60_000) return false;
+  rollupRangeChunked(from, to);
+  // Record AFTER the rollup so a thrown rollup isn't marked done — a retry
+  // within the window must be allowed to fill the gap.
+  rollupSeen.set(key, nowMs);
+  if (rollupSeen.size > 256) {
+    // Hard bound: drop oldest entries down to 256. Losing a live key only
+    // costs one extra rollup later; unbounded growth costs memory forever.
+    const byAge = [...rollupSeen.entries()].sort((a, b) => a[1] - b[1]);
+    for (let i = 0; i < byAge.length - 256; i++) rollupSeen.delete(byAge[i][0]);
+  }
+  return true;
 }
 
 // Age-based purge: summarize the deleted span into daily_usage (preserved),
@@ -678,19 +734,17 @@ export function runRetentionIfDue(nowMs: number): import("@/types").PurgeResult 
 // Abandon stale sessions (idle > 5 minutes)
 export function abandonStaleSessions(): number {
   const cutoff = Date.now() - 5 * 60 * 1000;
-  const d = getDb();
-  const result = d.prepare("UPDATE sessions SET status = 'abandoned', ended_at = ? WHERE status = 'active' AND updated_at < ?").run(Date.now(), cutoff);
+  const result = prep("UPDATE sessions SET status = 'abandoned', ended_at = ? WHERE status = 'active' AND updated_at < ?").run(Date.now(), cutoff);
   // Also complete their agents
   if (result.changes > 0) {
-    d.prepare("UPDATE agents SET status = 'completed', ended_at = ? WHERE status IN ('working', 'idle') AND session_id IN (SELECT id FROM sessions WHERE status = 'abandoned')").run(Date.now());
+    prep("UPDATE agents SET status = 'completed', ended_at = ? WHERE status IN ('working', 'idle') AND session_id IN (SELECT id FROM sessions WHERE status = 'abandoned')").run(Date.now());
   }
   return result.changes;
 }
 
 export function archiveStaleAgents(): number {
   const cutoff = Date.now() - 30 * 60 * 1000;
-  const d = getDb();
-  const result = d.prepare(
+  const result = prep(
     "UPDATE agents SET status = 'archived' WHERE status IN ('completed', 'failed', 'cancelled') AND ended_at IS NOT NULL AND ended_at < ?"
   ).run(cutoff);
   return result.changes;
@@ -714,7 +768,7 @@ export function rollupDailyUsageRange(from: number, to: number): void {
   // Bound the scan: daily_usage older than the cap is already immutable history
   const minFrom = Math.max(from, to - 92 * 86400000);
 
-  const tokenRows = d.prepare(`
+  const tokenRows = prep(`
     SELECT
       strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch', 'localtime') as date,
       t.model,
@@ -738,7 +792,7 @@ export function rollupDailyUsageRange(from: number, to: number): void {
 
   if (tokenRows.length === 0) return;
 
-  const toolStats = d.prepare(`
+  const toolStats = prep(`
     SELECT
       strftime('%Y-%m-%d', ae.timestamp / 1000, 'unixepoch', 'localtime') as date,
       COALESCE(s.project, '') as project,
@@ -753,7 +807,7 @@ export function rollupDailyUsageRange(from: number, to: number): void {
 
   const toolMap = new Map(toolStats.map(r => [`${r.date}|${r.project}`, r]));
 
-  const upsert = d.prepare(`
+  const upsert = prep(`
     INSERT INTO daily_usage (date, model, project, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, session_count, tool_calls, tool_failures)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(date, model, project) DO UPDATE SET
@@ -847,13 +901,18 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
     WHERE started_at >= ? AND started_at < ?${eP}
   `).get(Date.now(), from, to, ...pa) as { avg_ms: number };
 
+  // "Top" = the model that dominated the period: by cost when cost is tracked,
+  // by token volume otherwise — both providers here run flat subscriptions, so
+  // cost is usually 0 and tokens are the real signal.
   const topModel = d.prepare(`
-    SELECT model, SUM(cost) as model_cost
+    SELECT model,
+           SUM(cost) as model_cost,
+           SUM(input_tokens + output_tokens) as model_tokens
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id
     WHERE s.started_at >= ? AND s.started_at < ?${sP}
-    GROUP BY model ORDER BY model_cost DESC LIMIT 1
-  `).get(from, to, ...pa) as { model: string; model_cost: number } | undefined;
+    GROUP BY model ORDER BY model_cost DESC, model_tokens DESC LIMIT 1
+  `).get(from, to, ...pa) as { model: string; model_cost: number; model_tokens: number } | undefined;
 
   const toolStats = d.prepare(`
     SELECT
@@ -874,6 +933,14 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
     ? ((toolStats.calls - toolFailures.failures) / toolStats.calls) * 100
     : 100;
 
+  // Share on the same axis the ranking used: cost share when cost exists,
+  // token share otherwise.
+  const totalTokens = tokenData.total_input_tokens + tokenData.total_output_tokens;
+  const topModelPct = !topModel ? 0
+    : tokenData.total_cost > 0 ? Math.round((topModel.model_cost / tokenData.total_cost) * 100)
+    : totalTokens > 0 ? Math.round((topModel.model_tokens / totalTokens) * 100)
+    : 0;
+
   return {
     total_cost: tokenData.total_cost,
     cost_change_pct: Math.round(costChangePct * 10) / 10,
@@ -882,9 +949,7 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
     total_input_tokens: tokenData.total_input_tokens,
     total_output_tokens: tokenData.total_output_tokens,
     top_model: topModel?.model || "N/A",
-    top_model_cost_pct: topModel && tokenData.total_cost > 0
-      ? Math.round((topModel.model_cost / tokenData.total_cost) * 100)
-      : 0,
+    top_model_pct: topModelPct,
     tool_call_count: toolStats.calls,
     tool_success_rate: Math.round(successRate * 10) / 10,
   };
@@ -983,11 +1048,19 @@ export function getSessionAnalytics(from: number, to: number, sort = "started_at
       s.status,
       s.provider,
       (COALESCE(s.ended_at, ?) - s.started_at) as duration_ms,
-      COALESCE((SELECT SUM(input_tokens + output_tokens) FROM token_usage WHERE session_id = s.id), 0) as total_tokens,
-      COALESCE((SELECT SUM(cost) FROM token_usage WHERE session_id = s.id), 0) as cost,
-      (SELECT COUNT(*) FROM agent_events WHERE session_id = s.id AND event_type = 'tool_call') as tool_count,
+      COALESCE(tu.total_tokens, 0) as total_tokens,
+      COALESCE(tu.cost, 0) as cost,
+      COALESCE(ec.tool_count, 0) as tool_count,
       s.started_at
     FROM sessions s
+    LEFT JOIN (
+      SELECT session_id, SUM(input_tokens + output_tokens) AS total_tokens, SUM(cost) AS cost
+      FROM token_usage GROUP BY session_id
+    ) tu ON tu.session_id = s.id
+    LEFT JOIN (
+      SELECT session_id, COUNT(*) AS tool_count
+      FROM agent_events WHERE event_type = 'tool_call' GROUP BY session_id
+    ) ec ON ec.session_id = s.id
     WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.provider", provider)}
     ORDER BY ${sortCol} ${sortOrder}
     LIMIT ? OFFSET ?
@@ -997,7 +1070,6 @@ export function getSessionAnalytics(from: number, to: number, sort = "started_at
 export function getToolAnalytics(from: number, to: number, provider?: DbProvider): import("@/types").ToolAnalytics {
   const d = getDb();
   const eP = pSql("provider", provider);
-  const tcP = pSql("tc.provider", provider);
   const pa = pArg(provider);
 
   const tools = d.prepare(`
@@ -1015,33 +1087,49 @@ export function getToolAnalytics(from: number, to: number, provider?: DbProvider
     ORDER BY call_count DESC
   `).all(from, to, ...pa) as import("@/types").ToolAnalyticEntry[];
 
-  for (const tool of tools) {
-    const failures = d.prepare(`
-      SELECT COUNT(*) as cnt FROM agent_events
-      WHERE event_type = 'tool_result' AND tool_name = ?
+  // One grouped scan for failures (SQLite LIKE is already case-insensitive
+  // for ASCII, so two patterns cover error/Error/FAIL/fail).
+  const failureRows = d.prepare(`
+    SELECT tool_name, COUNT(*) as cnt FROM agent_events
+    WHERE event_type = 'tool_result' AND tool_name IS NOT NULL
+      AND timestamp >= ? AND timestamp < ?${eP}
+      AND (summary LIKE '%error%' OR summary LIKE '%fail%')
+    GROUP BY tool_name
+  `).all(from, to, ...pa) as { tool_name: string; cnt: number }[];
+  const failures = new Map(failureRows.map(r => [r.tool_name, r.cnt]));
+
+  // One window-function pass for durations: pair each tool_result with the
+  // NEAREST PRECEDING tool_call of the same (agent, tool) within 300s — a
+  // running MAX over prior rows, so back-to-back results from parallel
+  // same-tool calls all pair with the latest call instead of being dropped.
+  // The old per-tool self-join was O(n²) per tool (6.1s at 58K events); this
+  // is a single ordered scan (~80ms).
+  const durationRows = d.prepare(`
+    WITH seq AS (
+      SELECT tool_name, event_type, timestamp,
+        MAX(CASE WHEN event_type = 'tool_call' THEN timestamp END) OVER (
+          PARTITION BY agent_id, tool_name ORDER BY timestamp
+          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ) AS last_call_ts
+      FROM agent_events
+      WHERE event_type IN ('tool_call','tool_result') AND tool_name IS NOT NULL
         AND timestamp >= ? AND timestamp < ?${eP}
-        AND (summary LIKE '%error%' OR summary LIKE '%fail%' OR summary LIKE '%Error%' OR summary LIKE '%FAIL%')
-    `).get(tool.tool_name, from, to, ...pa) as { cnt: number };
-    tool.failure_count = failures.cnt;
+    )
+    SELECT tool_name, AVG(timestamp - last_call_ts) AS avg_ms
+    FROM seq
+    WHERE event_type = 'tool_result' AND last_call_ts IS NOT NULL
+      AND timestamp - last_call_ts BETWEEN 0 AND 300000
+    GROUP BY tool_name
+  `).all(from, to, ...pa) as { tool_name: string; avg_ms: number | null }[];
+  const durations = new Map(durationRows.map(r => [r.tool_name, r.avg_ms]));
+
+  for (const tool of tools) {
+    tool.failure_count = failures.get(tool.tool_name) ?? 0;
     tool.success_count = tool.call_count - tool.failure_count;
     tool.success_rate = tool.call_count > 0
       ? Math.round((tool.success_count / tool.call_count) * 1000) / 10
       : 100;
-  }
-
-  for (const tool of tools) {
-    const avgDur = d.prepare(`
-      SELECT AVG(tr.timestamp - tc.timestamp) as avg_ms
-      FROM agent_events tc
-      JOIN agent_events tr ON tr.agent_id = tc.agent_id
-        AND tr.event_type = 'tool_result'
-        AND tr.tool_name = tc.tool_name
-        AND tr.timestamp > tc.timestamp
-        AND tr.timestamp < tc.timestamp + 300000
-      WHERE tc.event_type = 'tool_call' AND tc.tool_name = ?
-        AND tc.timestamp >= ? AND tc.timestamp < ?${tcP}
-    `).get(tool.tool_name, from, to, ...pa) as { avg_ms: number | null };
-    tool.avg_duration_ms = Math.round(avgDur.avg_ms || 0);
+    tool.avg_duration_ms = Math.round(durations.get(tool.tool_name) ?? 0);
   }
 
   const timeline = d.prepare(`

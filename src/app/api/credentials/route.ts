@@ -5,6 +5,8 @@ import {
   deleteCredentials,
   maskKey,
 } from "@/lib/credentials";
+import { claudeUsageCache, openaiUsageCache } from "@/lib/providers/usage-cache";
+import { ClaudeClient } from "@/lib/providers/claude-client";
 import type { CredentialStore, ApiResponse } from "@/types";
 
 type MaskedStore = {
@@ -38,6 +40,13 @@ export async function POST(
     if (body.claude) merged.claude = { ...existing.claude, ...body.claude };
 
     saveCredentials(merged);
+
+    // New credentials just landed — server-side caches computed from the OLD
+    // ones must not keep serving stale results for their remaining TTL.
+    claudeUsageCache.invalidate("claude");
+    openaiUsageCache.invalidate("openai");
+    ClaudeClient.invalidateTokenCache();
+
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json(
@@ -65,6 +74,14 @@ export async function DELETE(
       );
     }
     deleteCredentials(provider);
+
+    // Same staleness gap as POST: without this, /api/health and the usage
+    // routes could keep serving "connected" results computed from the
+    // just-removed credentials for up to 30s.
+    claudeUsageCache.invalidate("claude");
+    openaiUsageCache.invalidate("openai");
+    ClaudeClient.invalidateTokenCache();
+
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json(

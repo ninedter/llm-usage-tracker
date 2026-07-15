@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCredentials } from "@/lib/credentials";
 import { ClaudeClient } from "@/lib/providers/claude-client";
 import { OpenAIClient } from "@/lib/providers/openai-client";
+import { claudeUsageCache, openaiUsageCache } from "@/lib/providers/usage-cache";
 import type { ApiResponse, ProviderHealth } from "@/types";
 
 export async function GET(): Promise<
@@ -13,28 +14,30 @@ export async function GET(): Promise<
     openai: { connected: false },
   };
 
-  if (creds.claude?.sessionKey && creds.claude?.organizationId) {
-    try {
-      await new ClaudeClient(creds.claude.sessionKey, creds.claude.organizationId).fetchUsage();
-      health.claude.connected = true;
-    } catch (e) {
-      health.claude.error = e instanceof Error ? e.message : "Unknown error";
-    }
-  } else {
-    health.claude.error = "No credentials configured";
-  }
-
-  const codexAuth = OpenAIClient.readCodexAuth();
-  if (codexAuth) {
-    try {
-      await new OpenAIClient(codexAuth.accessToken, codexAuth.accountId).fetchUsage();
-      health.openai.connected = true;
-    } catch (e) {
-      health.openai.error = e instanceof Error ? e.message : "Unknown error";
-    }
-  } else {
-    health.openai.error = "Codex CLI not logged in";
-  }
+  // Parallelize the two upstream checks (previously serial, ~1.43s) and reuse
+  // the same 30s-TTL cache the usage routes populate, so a healthy dashboard
+  // poll doesn't force a second round-trip to either SaaS.
+  const [claudeResult, openaiResult] = await Promise.allSettled([
+    (async () => {
+      const sessionKey = creds.claude?.sessionKey;
+      const organizationId = creds.claude?.organizationId;
+      if (!sessionKey || !organizationId) throw new Error("No credentials configured");
+      await claudeUsageCache.get("claude", () =>
+        new ClaudeClient(sessionKey, organizationId).fetchUsage()
+      );
+    })(),
+    (async () => {
+      const codexAuth = OpenAIClient.readCodexAuth();
+      if (!codexAuth) throw new Error("Codex CLI not logged in");
+      await openaiUsageCache.get("openai", () =>
+        new OpenAIClient(codexAuth.accessToken, codexAuth.accountId).fetchUsage()
+      );
+    })(),
+  ]);
+  health.claude.connected = claudeResult.status === "fulfilled";
+  if (claudeResult.status === "rejected") health.claude.error = claudeResult.reason instanceof Error ? claudeResult.reason.message : "Unknown error";
+  health.openai.connected = openaiResult.status === "fulfilled";
+  if (openaiResult.status === "rejected") health.openai.error = openaiResult.reason instanceof Error ? openaiResult.reason.message : "Unknown error";
 
   return NextResponse.json({ success: true, data: health });
 }

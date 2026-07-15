@@ -22,6 +22,7 @@ import {
   upsertTokenUsage,
   listAgents,
   listSessions,
+  listRecentEvents,
   getMonitorStats,
   getAnalyticsOverview,
   getToolAnalytics,
@@ -177,5 +178,53 @@ describe("provider scoping", () => {
     expect(count("anthropic") + count("openai")).toBe(count());
     expect(count()).toBeGreaterThan(0);
     expect(getUsageInsights(FROM, TO).projects.length).toBe(2);
+  });
+});
+
+// Hydration query for the Activity feed: the newest events across every agent,
+// optionally scoped to one provider. Timestamps here sit well above NOW so the
+// ordering assertions can't collide with events seeded by earlier tests.
+describe("listRecentEvents (Activity feed hydration)", () => {
+  beforeAll(() => {
+    createEvent(
+      { agent_id: "a-claude", session_id: "s-claude", event_type: "tool_call", tool_name: "Read", summary: "recent claude", content: null, files_affected: null, timestamp: NOW + 10_000 },
+      "anthropic"
+    );
+    createEvent(
+      { agent_id: "codex:a-openai", session_id: "codex:s-openai", event_type: "tool_call", tool_name: "exec", summary: "recent codex 1", content: null, files_affected: null, timestamp: NOW + 20_000 },
+      "openai",
+      "recent-codex-1"
+    );
+    createEvent(
+      { agent_id: "codex:a-openai", session_id: "codex:s-openai", event_type: "tool_result", tool_name: "exec", summary: "recent codex 2", content: null, files_affected: null, timestamp: NOW + 30_000 },
+      "openai",
+      "recent-codex-2"
+    );
+  });
+
+  it("returns the newest events first, across providers when unscoped", () => {
+    const all = listRecentEvents(100);
+    expect(all.slice(0, 3).map((e) => e.summary)).toEqual([
+      "recent codex 2",
+      "recent codex 1",
+      "recent claude",
+    ]);
+    expect(new Set(all.map((e) => e.provider))).toEqual(new Set(["anthropic", "openai"]));
+  });
+
+  it("scopes to a single provider", () => {
+    const openai = listRecentEvents(100, "openai");
+    expect(openai.length).toBeGreaterThan(0);
+    expect(openai.every((e) => e.provider === "openai")).toBe(true);
+    expect(openai.slice(0, 2).map((e) => e.summary)).toEqual(["recent codex 2", "recent codex 1"]);
+
+    const claude = listRecentEvents(100, "anthropic");
+    expect(claude.every((e) => e.provider === "anthropic")).toBe(true);
+    expect(claude[0].summary).toBe("recent claude");
+  });
+
+  it("respects the limit while keeping the newest rows", () => {
+    const limited = listRecentEvents(2, "openai");
+    expect(limited.map((e) => e.summary)).toEqual(["recent codex 2", "recent codex 1"]);
   });
 });

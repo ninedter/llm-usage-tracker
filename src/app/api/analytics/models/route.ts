@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getModelAnalytics, rollupDailyUsageRange } from "@/lib/db";
+import { getModelAnalytics, maybeRollupRange } from "@/lib/db";
 import { readProvider } from "@/lib/provider-param";
 import type { ApiResponse, ModelAnalytics } from "@/types";
 
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Mo
     const from = parseInt(url.searchParams.get("from") || String(now - 7 * 86400000));
     const to = parseInt(url.searchParams.get("to") || String(now));
 
-    rollupDailyUsageRange(from, to);
+    maybeRollupRange(from, to);
 
     const data = getModelAnalytics(from, to, provider);
     return NextResponse.json({ success: true, data });

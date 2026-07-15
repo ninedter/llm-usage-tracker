@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCredentials } from "@/lib/credentials";
 import { ClaudeClient } from "@/lib/providers/claude-client";
+import { claudeUsageCache } from "@/lib/providers/usage-cache";
 import type { ApiResponse, ClaudeUsageData } from "@/types";
 
 export async function GET(): Promise<
@@ -25,7 +26,7 @@ export async function GET(): Promise<
       creds.claude.sessionKey,
       creds.claude.organizationId
     );
-    const data = await client.fetchUsage();
+    const data = await claudeUsageCache.get("claude", () => client.fetchUsage());
 
     return NextResponse.json({ success: true, data });
   } catch (error) {

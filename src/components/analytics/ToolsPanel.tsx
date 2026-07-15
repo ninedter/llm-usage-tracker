@@ -1,6 +1,7 @@
 "use client";
 
-import type { ToolAnalytics } from "@/types";
+import { useMemo } from "react";
+import type { ToolAnalytics, ToolTimelinePoint } from "@/types";
 
 interface ToolsPanelProps {
   data: ToolAnalytics | null;
@@ -44,6 +45,18 @@ function buildDisplayNames(names: string[]): Map<string, string> {
 }
 
 export function ToolsPanel({ data, loading }: ToolsPanelProps) {
+  // Hooks must run unconditionally (before the loading/null early return
+  // below), so `timeline` is derived here rather than via destructuring data.
+  const timeline = useMemo(() => data?.timeline ?? [], [data]);
+  const timelineByTool = useMemo(() => {
+    const map = new Map<string, ToolTimelinePoint[]>();
+    for (const p of timeline) {
+      const list = map.get(p.tool_name);
+      if (list) list.push(p); else map.set(p.tool_name, [p]);
+    }
+    return map;
+  }, [timeline]);
+
   if (loading || !data) {
     return (
       <div className="animate-pulse space-y-3 p-4">
@@ -54,18 +67,14 @@ export function ToolsPanel({ data, loading }: ToolsPanelProps) {
     );
   }
 
-  const { tools, timeline } = data;
+  const { tools } = data;
   const maxCount = Math.max(...tools.map((t) => t.call_count), 1);
   const displayNames = buildDisplayNames(tools.map((t) => t.tool_name));
   const nameOf = (full: string) => displayNames.get(full) ?? full;
 
   const toolNames = tools.map((t) => t.tool_name);
-  const timelineByTool = new Map<string, typeof timeline>();
-  for (const name of toolNames) {
-    timelineByTool.set(name, timeline.filter((p) => p.tool_name === name));
-  }
-  const minTs = timeline.length > 0 ? Math.min(...timeline.map((p) => p.timestamp)) : 0;
-  const maxTs = timeline.length > 0 ? Math.max(...timeline.map((p) => p.timestamp)) : 1;
+  const minTs = timeline.length > 0 ? timeline.reduce((m, p) => (p.timestamp < m ? p.timestamp : m), Infinity) : 0;
+  const maxTs = timeline.length > 0 ? timeline.reduce((m, p) => (p.timestamp > m ? p.timestamp : m), -Infinity) : 1;
   const tsRange = maxTs - minTs || 1;
 
   return (
