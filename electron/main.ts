@@ -3,7 +3,6 @@ import {
   BrowserWindow,
   shell,
   Menu,
-  nativeTheme,
   dialog,
 } from "electron";
 import { join } from "path";
@@ -280,10 +279,23 @@ async function startServer(): Promise<number> {
   }
   console.log(`[main] Spawning embedded server with ${nodeBin}`);
 
-  serverProcess = spawn(nodeBin, [serverPath], {
+  // The watchdog makes the server exit when Electron dies — including
+  // SIGKILL (the documented pkill -9 restart step), which skips before-quit
+  // entirely. stdin must be a pipe: its EOF is the parent-death signal.
+  const watchdogPath = join(__dirname, "parent-watchdog.js");
+  if (!existsSync(watchdogPath)) {
+    console.warn(
+      `[main] ${watchdogPath} missing — embedded server will outlive a killed Electron`
+    );
+  }
+  const nodeArgs = existsSync(watchdogPath)
+    ? ["--require", watchdogPath, serverPath]
+    : [serverPath];
+
+  serverProcess = spawn(nodeBin, nodeArgs, {
     env,
     cwd: join(basePath, ".next", "standalone"),
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
 
   serverProcess.stdout?.on("data", (data: Buffer) => {
@@ -297,6 +309,9 @@ async function startServer(): Promise<number> {
   serverProcess.on("exit", (code) => {
     console.log(`[server] exited with code ${code}`);
     serverProcess = null;
+    // Whatever the reason (quit, crash, kill), the port in the file no
+    // longer answers — it must not linger for hooks to time out against.
+    removePortFile();
   });
 
   await waitForServer(port);
@@ -310,16 +325,34 @@ function killServer(): void {
   }
 }
 
+/**
+ * The port file must exist exactly while an embedded/dev server is
+ * reachable. Remove it on quit and on unexpected server exit — a leftover
+ * file points hooks at a dead (or worse, wedged orphan) port and costs
+ * every Claude Code event a connect-and-wait timeout.
+ */
+function removePortFile(): void {
+  try {
+    unlinkSync(portFilePath());
+  } catch {
+    // already gone — the normal case in docker mode
+  }
+}
+
 // ── Window ───────────────────────────────────────────────────────────────────
 
 function createWindow(initialUrl: string): void {
   mainWindow = new BrowserWindow({
-    width: 1100,
-    height: 750,
+    // Wide enough for the Analytics toolbar (provider filter + time range +
+    // nav ≈ 1178px incl. padding) — at 1100 its right edge was cropped.
+    width: 1240,
+    height: 800,
     minWidth: 800,
     minHeight: 600,
     title: APP_NAME,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? "#18181b" : "#ffffff",
+    // The UI pins <html class="dark"> regardless of OS theme, so paint the
+    // pre-load window dark too — a white flash would read as a glitch.
+    backgroundColor: "#09090b",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
@@ -525,5 +558,6 @@ if (!gotLock) {
   app.on("before-quit", () => {
     isQuitting = true;
     killServer();
+    removePortFile();
   });
 }
