@@ -29,13 +29,14 @@ export default function AnalyticsPage() {
 
   return (
     <div className="mx-auto flex w-full flex-1 flex-col px-4 pb-4">
-      {/* Header */}
-      <div className="titlebar-drag mb-4 flex items-center justify-between pt-2">
-        <div>
+      {/* Header — wraps instead of cropping when the window is narrower than
+          the full toolbar (provider filter + time range + nav ≈ 1178px) */}
+      <div className="titlebar-drag mb-4 flex flex-wrap items-center justify-between gap-y-2 pt-2">
+        <div className="whitespace-nowrap">
           <h1 className="text-xl font-bold text-zinc-100">Analytics</h1>
           <p className="mt-0.5 text-sm text-zinc-500">Usage insights and cost breakdown</p>
         </div>
-        <div className="titlebar-no-drag flex items-center gap-3">
+        <div className="titlebar-no-drag flex flex-wrap items-center gap-3 gap-y-2">
           <ProviderFilter value={provider} onChange={setProvider} />
           <TimeRangePicker
             preset={preset}

@@ -33,10 +33,15 @@ export function TrendChart({ data, loading }: TrendChartProps) {
     );
   }
 
+  // Cost and tokens are independent signals here: both providers run flat
+  // subscriptions, so cost is usually 0 while tokens are rich. Bars show
+  // tokens whenever any exist (events only as the last resort), and the cost
+  // series appears only when there is a real dollar amount to plot.
   const hasCostData = data.some((d) => d.cost > 0);
+  const hasTokenData = data.some((d) => d.tokens > 0);
   const hourly = data[0]?.date.includes("T") ?? false;
   const maxCost = Math.max(...data.map((d) => d.cost), 0.01);
-  const activityOf = (p: TrendPoint) => (hasCostData ? p.tokens : p.events);
+  const activityOf = (p: TrendPoint) => (hasTokenData ? p.tokens : p.events);
   const maxActivity = Math.max(...data.map(activityOf), 1);
   const todayStr = localDateStr(new Date());
 
@@ -47,7 +52,7 @@ export function TrendChart({ data, loading }: TrendChartProps) {
     <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm font-semibold text-zinc-200">
-          {hasCostData ? "Cost & Token Trend" : "Activity Trend"}
+          {hasCostData ? "Cost & Token Trend" : hasTokenData ? "Token Trend" : "Activity Trend"}
         </p>
         <div className="flex items-center gap-3 text-sm">
           {hasCostData && (
@@ -58,7 +63,7 @@ export function TrendChart({ data, loading }: TrendChartProps) {
           )}
           <span className="flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-sm bg-blue-500" />
-            <span className="text-zinc-400">{hasCostData ? "Tokens" : "Events"}</span>
+            <span className="text-zinc-400">{hasTokenData ? "Tokens" : "Events"}</span>
           </span>
           <span className="flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-sm bg-violet-500" />
@@ -83,7 +88,7 @@ export function TrendChart({ data, loading }: TrendChartProps) {
                 <div className="rounded-md bg-zinc-700 px-2 py-1 text-xs text-zinc-200 whitespace-nowrap shadow-lg">
                   <p className="font-medium">{hourly ? point.date.replace("T", " ") : point.date}</p>
                   {hasCostData && <p className="text-emerald-300">${point.cost.toFixed(2)}</p>}
-                  <p className="text-blue-300">{activity.toLocaleString()} {hasCostData ? "tokens" : "events"}</p>
+                  <p className="text-blue-300">{activity.toLocaleString()} {hasTokenData ? "tokens" : "events"}</p>
                   <p className="text-violet-300">{point.sessions} session{point.sessions === 1 ? "" : "s"}</p>
                 </div>
               </div>

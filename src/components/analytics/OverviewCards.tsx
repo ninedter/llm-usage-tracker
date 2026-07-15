@@ -21,6 +21,13 @@ function formatDuration(ms: number): string {
   return `${Math.floor(ms / 1000)}s`;
 }
 
+function shortModelName(model: string): string {
+  return model.replace("claude-", "").replace("-latest", "").replace(/-20\d{6}$/, "");
+}
+
+// One fixed card set for every provider filter (Claude, OpenAI, All) — the
+// same five metrics regardless of which provider is selected, so switching the
+// filter compares numbers instead of swapping layouts.
 export function OverviewCards({ data, loading }: OverviewCardsProps) {
   if (loading || !data) {
     return (
@@ -35,75 +42,42 @@ export function OverviewCards({ data, loading }: OverviewCardsProps) {
     );
   }
 
-  const hasTokenData = data.total_input_tokens + data.total_output_tokens > 0;
-  const failedCalls = Math.round(
-    (data.tool_call_count * (100 - data.tool_success_rate)) / 100
-  );
-  const callsPerSession =
-    data.session_count > 0
-      ? Math.round(data.tool_call_count / data.session_count)
-      : data.tool_call_count;
+  const totalTokens = data.total_input_tokens + data.total_output_tokens;
+  const hasTopModel = data.top_model !== "N/A";
 
   const cards = [
-    hasTokenData
-      ? {
-          label: "Total Cost",
-          value: `$${data.total_cost.toFixed(2)}`,
-          sub: data.cost_change_pct !== 0
-            ? `${data.cost_change_pct > 0 ? "+" : ""}${data.cost_change_pct.toFixed(1)}% vs prev`
-            : null,
-          subColor: data.cost_change_pct > 0 ? "text-red-400" : "text-emerald-400",
-        }
-      : {
-          label: "Avg Duration",
-          value: formatDuration(data.avg_session_duration_ms),
-          sub: "per session",
-          subColor: "text-zinc-500",
-        },
+    {
+      label: "Total Cost",
+      value: `$${data.total_cost.toFixed(2)}`,
+      sub: data.cost_change_pct !== 0
+        ? `${data.cost_change_pct > 0 ? "+" : ""}${data.cost_change_pct.toFixed(1)}% vs prev`
+        : null,
+      subColor: data.cost_change_pct > 0 ? "text-red-400" : "text-emerald-400",
+    },
     {
       label: "Sessions",
       value: String(data.session_count),
       sub: `avg ${formatDuration(data.avg_session_duration_ms)} per session`,
       subColor: "text-zinc-500",
     },
-    hasTokenData
-      ? {
-          label: "Tokens Used",
-          value: formatTokens(data.total_input_tokens + data.total_output_tokens),
-          sub: `${formatTokens(data.total_input_tokens)} in / ${formatTokens(data.total_output_tokens)} out`,
-          subColor: "text-zinc-500",
-        }
-      : {
-          label: "Events",
-          value: String(data.tool_call_count * 2), // approx: tool_call + tool_result
-          sub: "tool calls + results",
-          subColor: "text-zinc-500",
-        },
-    hasTokenData
-      ? {
-          label: "Top Model",
-          value: data.top_model.replace("claude-", "").replace("-latest", ""),
-          sub: `${data.top_model_cost_pct}% of cost`,
-          subColor: "text-zinc-500",
-          valueColor: "text-violet-400",
-        }
-      : {
-          label: "Success Rate",
-          value: `${data.tool_success_rate}%`,
-          sub: `${failedCalls.toLocaleString()} failed`,
-          subColor: "text-zinc-500",
-          valueColor: data.tool_success_rate >= 95 ? "text-emerald-400" : "text-amber-400",
-        },
+    {
+      label: "Tokens Used",
+      value: formatTokens(totalTokens),
+      sub: `${formatTokens(data.total_input_tokens)} in / ${formatTokens(data.total_output_tokens)} out`,
+      subColor: "text-zinc-500",
+    },
+    {
+      label: "Top Model",
+      value: hasTopModel ? shortModelName(data.top_model) : "N/A",
+      sub: hasTopModel ? `${data.top_model_pct}% of usage` : null,
+      subColor: "text-zinc-500",
+      valueColor: hasTopModel ? "text-violet-400" : undefined,
+    },
     {
       label: "Tool Calls",
       value: String(data.tool_call_count),
-      // In the token view there's no Success Rate card, so surface the rate
-      // here; in the activity view it would just echo that card, so show
-      // per-session throughput instead.
-      sub: hasTokenData ? `${data.tool_success_rate}% success` : `${callsPerSession.toLocaleString()} per session`,
-      subColor: hasTokenData
-        ? data.tool_success_rate >= 95 ? "text-emerald-400" : data.tool_success_rate >= 80 ? "text-amber-400" : "text-red-400"
-        : "text-zinc-500",
+      sub: `${data.tool_success_rate}% success`,
+      subColor: data.tool_success_rate >= 95 ? "text-emerald-400" : data.tool_success_rate >= 80 ? "text-amber-400" : "text-red-400",
     },
   ];
 

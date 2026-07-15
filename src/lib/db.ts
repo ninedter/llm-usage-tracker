@@ -901,13 +901,18 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
     WHERE started_at >= ? AND started_at < ?${eP}
   `).get(Date.now(), from, to, ...pa) as { avg_ms: number };
 
+  // "Top" = the model that dominated the period: by cost when cost is tracked,
+  // by token volume otherwise — both providers here run flat subscriptions, so
+  // cost is usually 0 and tokens are the real signal.
   const topModel = d.prepare(`
-    SELECT model, SUM(cost) as model_cost
+    SELECT model,
+           SUM(cost) as model_cost,
+           SUM(input_tokens + output_tokens) as model_tokens
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id
     WHERE s.started_at >= ? AND s.started_at < ?${sP}
-    GROUP BY model ORDER BY model_cost DESC LIMIT 1
-  `).get(from, to, ...pa) as { model: string; model_cost: number } | undefined;
+    GROUP BY model ORDER BY model_cost DESC, model_tokens DESC LIMIT 1
+  `).get(from, to, ...pa) as { model: string; model_cost: number; model_tokens: number } | undefined;
 
   const toolStats = d.prepare(`
     SELECT
@@ -928,6 +933,14 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
     ? ((toolStats.calls - toolFailures.failures) / toolStats.calls) * 100
     : 100;
 
+  // Share on the same axis the ranking used: cost share when cost exists,
+  // token share otherwise.
+  const totalTokens = tokenData.total_input_tokens + tokenData.total_output_tokens;
+  const topModelPct = !topModel ? 0
+    : tokenData.total_cost > 0 ? Math.round((topModel.model_cost / tokenData.total_cost) * 100)
+    : totalTokens > 0 ? Math.round((topModel.model_tokens / totalTokens) * 100)
+    : 0;
+
   return {
     total_cost: tokenData.total_cost,
     cost_change_pct: Math.round(costChangePct * 10) / 10,
@@ -936,9 +949,7 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
     total_input_tokens: tokenData.total_input_tokens,
     total_output_tokens: tokenData.total_output_tokens,
     top_model: topModel?.model || "N/A",
-    top_model_cost_pct: topModel && tokenData.total_cost > 0
-      ? Math.round((topModel.model_cost / tokenData.total_cost) * 100)
-      : 0,
+    top_model_pct: topModelPct,
     tool_call_count: toolStats.calls,
     tool_success_rate: Math.round(successRate * 10) / 10,
   };

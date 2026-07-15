@@ -17,7 +17,7 @@ function formatTokens(n: number): string {
 }
 
 function shortModelName(model: string): string {
-  return model.replace("claude-", "").replace("-latest", "").replace("-20250", "");
+  return model.replace("claude-", "").replace("-latest", "").replace(/-20\d{6}$/, "");
 }
 
 export function ModelsPanel({ data, loading }: ModelsPanelProps) {
@@ -45,30 +45,40 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
 
   const { models } = data;
   const totalCost = models.reduce((s, m) => s + m.cost, 0);
+  const modelTokens = (m: { input_tokens: number; output_tokens: number }) => m.input_tokens + m.output_tokens;
+  const totalTokens = models.reduce((s, m) => s + modelTokens(m), 0);
+  // Cost is the share axis only when someone actually tracked a dollar amount;
+  // on flat subscriptions (cost 0 everywhere) token volume is the real signal.
+  const useCost = totalCost > 0;
+  const shareOf = (m: ModelAnalytics["models"][number]) => (useCost ? m.cost : modelTokens(m));
+  const shareTotal = useCost ? totalCost : totalTokens;
 
   const segments: Array<
     ModelAnalytics["models"][number] & { pct: number; color: string; offset: number }
   > = [];
   let offset = 25;
   for (const [i, m] of models.entries()) {
-    const pct = totalCost > 0 ? (m.cost / totalCost) * 100 : 0;
+    const pct = shareTotal > 0 ? (shareOf(m) / shareTotal) * 100 : 0;
     segments.push({ ...m, pct, color: MODEL_COLORS[i % MODEL_COLORS.length], offset });
     offset -= pct;
   }
 
   const trendDates = [...new Set(trend.map((t) => t.date))].sort();
   const trendModels = [...new Set(trend.map((t) => t.model))];
-  const maxDayCost = Math.max(
+  const trendValue = (t: ModelTrendPoint) => (useCost ? t.cost : t.tokens);
+  const maxDayValue = Math.max(
     ...trendDates.map((d) =>
-      (trendByDate.get(d) ?? []).reduce((s, t) => s + t.cost, 0)
+      (trendByDate.get(d) ?? []).reduce((s, t) => s + trendValue(t), 0)
     ),
-    0.01
+    useCost ? 0.01 : 1
   );
 
   return (
     <div className="p-3 space-y-4">
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">Cost by Model</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">
+          {useCost ? "Cost by Model" : "Usage by Model"}
+        </p>
         <div className="flex items-center gap-6">
           <svg width="120" height="120" viewBox="0 0 42 42" className="flex-shrink-0">
             {segments.map((seg, i) => (
@@ -83,10 +93,10 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
               />
             ))}
             <text x="21" y="20" textAnchor="middle" fontSize="5.5" fill="#f4f4f5" fontWeight="700">
-              ${totalCost.toFixed(2)}
+              {useCost ? `$${totalCost.toFixed(2)}` : formatTokens(totalTokens)}
             </text>
             <text x="21" y="25.5" textAnchor="middle" fontSize="4" fill="#71717a">
-              total
+              {useCost ? "total" : "tokens"}
             </text>
           </svg>
           <div className="space-y-2 flex-1">
@@ -97,7 +107,7 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
                   <span className="text-sm text-zinc-200">{shortModelName(seg.model)}</span>
                 </div>
                 <span className="text-sm font-mono font-semibold" style={{ color: seg.color }}>
-                  ${seg.cost.toFixed(2)}
+                  {useCost ? `$${seg.cost.toFixed(2)}` : formatTokens(modelTokens(seg))}
                 </span>
               </div>
             ))}
@@ -164,8 +174,8 @@ export function ModelsPanel({ data, loading }: ModelsPanelProps) {
                   <div className="w-full flex flex-col-reverse" style={{ height: 65 }}>
                     {trendModels.map((model, mi) => {
                       const entry = dayData.find((d) => d.model === model);
-                      if (!entry || entry.cost === 0) return null;
-                      const h = (entry.cost / maxDayCost) * 100;
+                      if (!entry || trendValue(entry) === 0) return null;
+                      const h = (trendValue(entry) / maxDayValue) * 100;
                       return (
                         <div
                           key={model}

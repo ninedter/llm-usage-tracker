@@ -226,7 +226,8 @@ export interface AnalyticsOverview {
   total_input_tokens: number;
   total_output_tokens: number;
   top_model: string;
-  top_model_cost_pct: number;
+  /** Top model's share of the period — of cost when cost is tracked, else of tokens. */
+  top_model_pct: number;
   tool_call_count: number;
   tool_success_rate: number;
 }
