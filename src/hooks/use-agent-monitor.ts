@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import useSWR from "swr";
+import { mergeRecentActivity, ACTIVITY_FEED_CAP } from "@/lib/activity-merge";
 import type { ProviderFilterValue } from "@/components/ui/ProviderFilter";
 import type { ApiResponse, AgentRecord, AgentEvent, AgentSession, MonitorStats } from "@/types";
 
@@ -30,12 +31,16 @@ export function useAgentMonitor() {
   const [provider, setProviderRaw] = useState<ProviderFilterValue>("all");
   const eventSourceRef = useRef<EventSource | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Current provider scope, readable from the SSE handler (which subscribes
+  // once with empty deps and would otherwise close over the initial value).
+  const providerRef = useRef<ProviderFilterValue>("all");
 
   const pq = provider === "all" ? "" : `provider=${provider}`;
 
   // Switching provider must drop the merge-only caches, or agents from the tab
   // you just left would linger (SWR onSuccess and SSE both only ever add).
   const setProviderAndReset = useCallback((p: ProviderFilterValue) => {
+    providerRef.current = p;
     setProviderRaw(p);
     setAgents(new Map());
     setEvents(new Map());
@@ -57,6 +62,28 @@ export function useAgentMonitor() {
           }
           return next;
         });
+      },
+    }
+  );
+
+  // Hydrate the Activity feed from the DB. Without this the feed only ever
+  // holds events broadcast over SSE while the page is open — which looks fine
+  // for Claude (hooks fire constantly during use) but leaves scopes fed by
+  // ingestion, like Codex/OpenAI, permanently empty. Merge instead of replace:
+  // SSE events may land while the fetch is in flight.
+  const { mutate: refetchActivity } = useSWR<AgentEvent[]>(
+    `/api/monitor/events?limit=${ACTIVITY_FEED_CAP}${pq ? `&${pq}` : ""}`,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      refreshInterval: 60_000,
+      onSuccess: (fetched) => {
+        // A fetch for the previous scope can resolve after a provider switch
+        // already reset the feed — trim to the scope that's current *now* so
+        // out-of-scope rows never occupy slots in the capped feed.
+        const scope = providerRef.current;
+        const inScope = scope === "all" ? fetched : fetched.filter((e) => e.provider === scope);
+        setRecentActivity((prev) => mergeRecentActivity(prev, inScope));
       },
     }
   );
@@ -115,13 +142,16 @@ export function useAgentMonitor() {
             next.set(event.agent_id, appended);
             return next;
           });
-          // Add to recent activity feed (keep last 100)
-          setRecentActivity((prev) => {
-            if (prev.length >= 100) {
-              return [event, ...prev.slice(0, 99)];
-            }
-            return [event, ...prev];
-          });
+          // Add to the recent activity feed — but only events in the current
+          // provider scope. The feed is capped, so letting a chatty provider's
+          // stream in while another is selected would evict the hydrated
+          // history the user is actually looking at. The merge keeps order,
+          // dedupes against rows the hydration fetch already delivered, and
+          // enforces the cap.
+          const scope = providerRef.current;
+          if (scope === "all" || event.provider === scope) {
+            setRecentActivity((prev) => mergeRecentActivity(prev, [event]));
+          }
         }
 
         if (msg.type === "session_created" || msg.type === "session_updated" || msg.type === "stats_updated") {
@@ -186,8 +216,9 @@ export function useAgentMonitor() {
     [agents, provider]
   );
 
-  // SSE pushes every provider's events; the Activity tab must honour the
-  // provider scope just like the fetched agents/sessions/stats do.
+  // Insertion into recentActivity is already scope-filtered (SSE and the
+  // hydration fetch both check providerRef); this is a display-level safety
+  // net for anything that slips through around a scope switch.
   const visibleActivity = useMemo(
     () => (provider === "all" ? recentActivity : recentActivity.filter((e) => e.provider === provider)),
     [recentActivity, provider]
@@ -205,9 +236,10 @@ export function useAgentMonitor() {
 
   const refetchAll = useCallback(() => {
     refetchAgents();
+    refetchActivity();
     refetchSessions();
     refetchStats();
-  }, [refetchAgents, refetchSessions, refetchStats]);
+  }, [refetchAgents, refetchActivity, refetchSessions, refetchStats]);
 
   // Drop all client-held monitor state. agents/events/recentActivity are
   // merge-only (SWR onSuccess and SSE both only add), so after a destructive

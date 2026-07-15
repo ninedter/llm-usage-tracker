@@ -9,12 +9,32 @@ import {
   createAgent,
   getMainAgent,
   getWorkingSubagents,
+  listRecentEvents,
   rollupDailyUsage,
 } from "@/lib/db";
 import { broadcastEvent } from "@/lib/ws";
+import { readProvider } from "@/lib/provider-param";
 import type { ApiResponse, AgentEvent } from "@/types";
 
 let lastRollup = 0;
+
+// GET /api/monitor/events — Newest events across all agents (optionally one
+// provider), newest first. Hydrates the Activity feed on load/provider switch.
+export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<AgentEvent[]>>> {
+  try {
+    const url = new URL(req.url);
+    const provider = readProvider(url);
+    const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "100", 10) || 100, 1), 500);
+
+    const events = listRecentEvents(limit, provider);
+    return NextResponse.json({ success: true, data: events });
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, error: { code: "FETCH_ERROR", message: error instanceof Error ? error.message : "Failed to fetch events" } },
+      { status: 500 }
+    );
+  }
+}
 
 // POST /api/monitor/events — Record a new event and handle lifecycle transitions
 export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse<AgentEvent>>> {

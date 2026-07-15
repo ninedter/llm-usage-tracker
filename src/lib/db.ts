@@ -408,6 +408,15 @@ export function listEvents(agentId: string, filters?: {
   ).all(...values, limit, offset) as AgentEvent[];
 }
 
+// Newest events across every agent — hydrates the Activity feed, which would
+// otherwise show only events broadcast over SSE while the page happens to be
+// open (Codex backfill, for one, is never broadcast).
+export function listRecentEvents(limit = 100, provider?: DbProvider): AgentEvent[] {
+  return getDb().prepare(
+    `SELECT * FROM agent_events${provider ? " WHERE provider = ?" : ""} ORDER BY timestamp DESC, id DESC LIMIT ?`
+  ).all(...pArg(provider), limit) as AgentEvent[];
+}
+
 export function listSessionEvents(sessionId: string, filters?: {
   event_type?: string;
   limit?: number;

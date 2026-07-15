@@ -423,7 +423,7 @@ export function AgentMonitorPanel() {
         {viewMode === "activity" && (
           <div className="px-3 py-2">
             {recentActivity.length === 0 ? (
-              <EmptyState fc={fc} />
+              <EmptyState fc={fc} provider={provider} />
             ) : (
               <div className="space-y-0.5">
                 {recentActivity.slice(0, 50).map((event) => (
@@ -438,7 +438,7 @@ export function AgentMonitorPanel() {
         {viewMode === "agents" && (
           <div className="p-3 space-y-2">
             {filteredAgents.length === 0 ? (
-              <EmptyState fc={fc} />
+              <EmptyState fc={fc} provider={provider} />
             ) : (
               filteredAgents.map((agent) => (
                 <AgentCard
@@ -457,7 +457,7 @@ export function AgentMonitorPanel() {
         {viewMode === "sessions" && (
           <div className="p-3 space-y-2">
             {sessions.length === 0 ? (
-              <EmptyState fc={fc} />
+              <EmptyState fc={fc} provider={provider} />
             ) : (
               sessions.map((session) => (
                 <SessionCard key={session.session_id} session={session} fc={fc} />
@@ -484,7 +484,13 @@ export function AgentMonitorPanel() {
   );
 }
 
-function EmptyState({ fc }: { fc: ReturnType<typeof useMonitorSettings>["fontClasses"] }) {
+const EMPTY_STATE_HINTS: Record<ProviderFilterValue, string> = {
+  all: "Activity appears when Claude Code or Codex sessions are active",
+  anthropic: "Activity appears when Claude Code hooks are active",
+  openai: "Activity appears when Codex CLI sessions are ingested",
+};
+
+function EmptyState({ fc, provider }: { fc: ReturnType<typeof useMonitorSettings>["fontClasses"]; provider: ProviderFilterValue }) {
   return (
     <div className="flex flex-col items-center justify-center py-12">
       <svg className="h-8 w-8 text-zinc-800" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -492,7 +498,7 @@ function EmptyState({ fc }: { fc: ReturnType<typeof useMonitorSettings>["fontCla
       </svg>
       <p className={`mt-2 ${fc.small} text-zinc-600`}>No activity yet</p>
       <p className={`mt-0.5 ${fc.tiny} text-zinc-700`}>
-        Activity appears when Claude Code hooks are active
+        {EMPTY_STATE_HINTS[provider]}
       </p>
     </div>
   );
