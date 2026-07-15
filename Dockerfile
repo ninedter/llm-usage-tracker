@@ -25,7 +25,8 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     PORT=3000 \
     LLM_DATA_DIR=/data \
-    CODEX_HOME=/codex
+    CODEX_HOME=/codex \
+    CLAUDE_PROJECTS_DIR=/claude-projects
 
 # postbuild already copied .next/static and public into standalone
 COPY --from=builder --chown=node:node /app/.next/standalone ./
