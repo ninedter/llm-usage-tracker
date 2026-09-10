@@ -1,5 +1,5 @@
 {
-  "_comment": "Add these hooks to ~/.claude/settings.json. For local use no extra variables are needed — the hook auto-discovers the tracker on :3789 (Docker), :3000, and the Electron port file. For cloud/remote sessions, set MONITOR_URL instead.",
+  "_comment": "Add these hooks to ~/.claude/settings.json. For local use no extra variables are needed — the hook auto-discovers the tracker on :3789 (Docker), :3000, and the Electron port file. For a remote hub, run the edge shipper on this machine and use hooks_edge (see edge/README.md). For cloud/tunnel sessions, set MONITOR_URL instead.",
 
   "hooks_local": {
     "PreToolUse": [
@@ -20,6 +20,86 @@
           {
             "type": "command",
             "command": "CLAUDE_HOOK_TYPE=PostToolUse /path/to/llm-usage-tracker/hooks/agent-monitor-hook.sh"
+          }
+        ]
+      }
+    ]
+  },
+
+  "hooks_edge": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PreToolUse /path/to/llm-usage-tracker/hooks/edge-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PostToolUse /path/to/llm-usage-tracker/hooks/edge-hook.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=Stop /path/to/llm-usage-tracker/hooks/edge-hook.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SubagentStop /path/to/llm-usage-tracker/hooks/edge-hook.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SessionStart /path/to/llm-usage-tracker/hooks/edge-hook.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SessionEnd /path/to/llm-usage-tracker/hooks/edge-hook.sh"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=Notification /path/to/llm-usage-tracker/hooks/edge-hook.sh"
           }
         ]
       }

@@ -1,0 +1,19 @@
+{
+  "name": "llm-usage-tracker-edge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Edge shipper: buffers local Claude Code / Codex hook events and ships them to the LLM Usage Tracker hub",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "llm-edge": "./bin/llm-edge.js"
+  },
+  "scripts": {
+    "start": "node bin/llm-edge.js start",
+    "test": "node --test test/"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

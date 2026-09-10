@@ -24,6 +24,7 @@ A macOS desktop + always-on Docker application that monitors your AI subscriptio
 - [Claude token usage (transcripts)](#claude-token-usage-transcripts)
 - [OpenAI / Codex tracking](#openai--codex-tracking)
 - [Multi-machine hub](#multi-machine-hub)
+- [Shipping from another machine (the edge)](#shipping-from-another-machine-the-edge)
 - [API reference](#api-reference)
 - [Data management & retention](#data-management--retention)
 - [Performance](#performance)
@@ -185,7 +186,9 @@ Register it in `~/.claude/settings.json` (adjust the path to your checkout):
 
 What each event becomes: `PreToolUse` → a `tool_call` (or `subagent_start` when the Agent tool spawns a subagent, with its type and description), `PostToolUse` → `tool_result`, `Stop` → the agent going idle, `SubagentStop` → subagent completion, `SessionStart`/`SessionEnd` → session lifecycle, `Notification` → notifications with context-compaction detection. File paths are extracted from tool inputs to power the Files analytics.
 
-**Remote/cloud sessions**: set `MONITOR_URL=https://your-tunnel.example.com` in the hook command instead — see `hooks/claude-hooks-config.json` for both variants. A smoke test lives at `hooks/test-hook.sh`.
+**Remote hub**: run the [edge shipper](edge/README.md) on this machine and use `hooks/edge-hook.sh` instead — same payload, but it posts to the local edge, which spools to disk and forwards to the hub.
+
+**Remote/cloud sessions**: set `MONITOR_URL=https://your-tunnel.example.com` in the hook command instead — see `hooks/claude-hooks-config.json` for all three variants. A smoke test lives at `hooks/test-hook.sh` (`MONITOR_URL=http://127.0.0.1:3799 bash hooks/test-hook.sh` aims it at the edge).
 
 ## Claude token usage (transcripts)
 
@@ -252,6 +255,42 @@ curl -X POST http://henrys-mac-mini:3789/api/ingest/v1 \
 - `source_id` is a required, stable idempotency key. Replaying a batch is safe: duplicates are counted, never re-inserted, and lifecycle side effects aren't re-run.
 - Batches are capped at 500 events (400 past the cap); a batch is validated in full before anything is written.
 - Events go through the same lifecycle handling as the local hook path — session start/end, agent auto-registration, subagent routing, daily rollup.
+
+### Shipping from another machine (the edge)
+
+Machines that aren't the hub run the **edge shipper** in `edge/` — a
+zero-dependency Node agent. Claude Code hooks post to a loopback intake, events
+land in a durable on-disk spool, and a flusher forwards them to
+`/api/ingest/v1` in batches with the bearer token:
+
+```
+Claude Code hook ──POST 127.0.0.1:3799──▶ edge ──spool──▶ hub /api/ingest/v1
+```
+
+```bash
+# On grok-bot-box (Linux) or henrymacbook-pro (macOS)
+mkdir -p ~/.config/llm-usage-tracker-edge
+cat > ~/.config/llm-usage-tracker-edge/.env <<'EOF'
+TRACKER_URL=http://henrys-mac-mini:3789
+MACHINE_ID=grok-bot-box
+MACHINE_LABEL=Grok Bot box
+EOF
+read -rs -p "INGEST_TOKEN: " T && printf 'INGEST_TOKEN=%s\n' "$T" >> ~/.config/llm-usage-tracker-edge/.env && unset T
+chmod 600 ~/.config/llm-usage-tracker-edge/.env
+
+node edge/bin/llm-edge.js start          # foreground; launchd/systemd units in edge/README.md
+node edge/bin/llm-edge.js status         # queue depth + effective config (token redacted)
+```
+
+Then point the hooks at `hooks/edge-hook.sh` (the `hooks_edge` block in
+`hooks/claude-hooks-config.json`). This is what removes the need to mount a
+remote machine's `~/.claude` / `~/.codex` on the hub: hook events travel over
+the tailnet, buffered on disk when it's down. Events keep their idempotency key,
+so a retried batch is deduped rather than duplicated.
+
+**macOS and Linux in v1**; Windows is roadmap (the code is path-portable, but no
+service installer is provided yet). Full install, service units, CLI, config
+table and troubleshooting: [`edge/README.md`](edge/README.md).
 
 ## API reference
 
@@ -347,8 +386,15 @@ llm-usage-tracker/
 ├── hooks/
 │   ├── agent-monitor-hook.sh    # thin wrapper (keeps ~/.claude/settings.json stable)
 │   ├── agent-monitor-hook.py    # the actual hook: parse → discover ports → POST (one process)
-│   ├── claude-hooks-config.json # copy-paste hook config (local + tunnel variants)
+│   ├── edge-hook.sh             # same hook, aimed at the local edge shipper (remote hub)
+│   ├── claude-hooks-config.json # copy-paste hook config (local + edge + tunnel variants)
 │   └── test-hook.sh             # smoke test for all 7 event types
+├── edge/                        # edge shipper: standalone, zero-dependency Node package
+│   ├── bin/llm-edge.js          #   CLI: start | status | drain | send | config
+│   ├── src/                     #   config, intake (loopback HTTP), queue (JSONL spool),
+│   │                            #   shipper (batch + backoff), agent (wiring), log (redaction)
+│   ├── test/                    #   node --test suite (no install required)
+│   └── README.md                #   macOS + Linux install, launchd/systemd units
 ├── src/
 │   ├── app/                     # Next.js App Router: / (dashboard), /monitor, /analytics, /settings
 │   │   └── api/                 # all routes listed in the API reference
@@ -378,7 +424,8 @@ llm-usage-tracker/
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Next.js dev server (UI + API + Codex watcher) |
-| `npm test` | vitest suite (155 tests: schema, queries, purge, providers, codex ingest, claude transcripts, throttles, SSE) |
+| `npm test` | vitest suite (160 tests: schema, queries, purge, providers, codex ingest, claude transcripts, throttles, SSE, edge↔hub ingest contract) |
+| `npm run test:edge` | edge shipper suite (`node --test`, no dependencies to install) |
 | `npm run build` | Production build (standalone output + static assets) |
 | `npm run electron:dev` | Hot-reload development with the Electron shell |
 | `npm run electron:build` | Clean → build → compile → package DMG + zip |

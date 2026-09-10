@@ -64,3 +64,6 @@ AGENTS.md
 
 # python bytecode (hook script)
 __pycache__/
+
+# edge shipper (standalone package, zero deps — but keep a stray install out)
+edge/node_modules/

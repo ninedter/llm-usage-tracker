@@ -20,3 +20,6 @@ docs
 hooks
 *.md
 .DS_Store
+
+# edge shipper: runs on the machine, not inside the hub image
+edge
