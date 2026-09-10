@@ -6,6 +6,8 @@ import { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { useMonitorSettings, type MonitorFontSize } from "@/hooks/use-monitor-settings";
 import { useNow } from "@/hooks/use-now";
 import type { ProviderFilterValue } from "@/components/ui/ProviderFilter";
+import { MachineFilter } from "@/components/ui/MachineFilter";
+import { useMachines } from "@/hooks/use-machines";
 import type { AgentEvent, AgentRecord, AgentSession } from "@/types";
 
 type ViewMode = "activity" | "agents" | "sessions";
@@ -136,6 +138,8 @@ export function AgentMonitorPanel() {
   const {
     provider,
     setProvider,
+    machine,
+    setMachine,
     agents,
     workingAgents,
     idleAgents,
@@ -149,6 +153,7 @@ export function AgentMonitorPanel() {
     reset,
   } = useAgentMonitor();
 
+  const machines = useMachines();
   const { fontSize, setFontSize, fontClasses: fc, fontSizeOptions } = useMonitorSettings();
 
   // events arrays are already capped at 200 in the hook, so pass them through
@@ -335,7 +340,7 @@ export function AgentMonitorPanel() {
         </div>
 
         {/* View mode tabs */}
-        <div className="mt-2 flex items-center gap-1">
+        <div className="mt-2 flex flex-wrap items-center gap-1">
           {(["activity", "agents", "sessions"] as ViewMode[]).map((mode) => (
             <button
               key={mode}
@@ -350,7 +355,8 @@ export function AgentMonitorPanel() {
             </button>
           ))}
 
-          {/* Provider scope — applies to every view (activity, agents, sessions) */}
+          {/* Provider + machine scope — apply to every view (activity, agents,
+              sessions). The machine group hides itself on a single-machine hub. */}
           <div className="ml-2 flex items-center gap-0.5 border-l border-zinc-800 pl-2">
             {([
               { key: "all", label: "All" },
@@ -371,6 +377,14 @@ export function AgentMonitorPanel() {
               </button>
             ))}
           </div>
+
+          <MachineFilter
+            machines={machines}
+            value={machine}
+            onChange={setMachine}
+            variant="compact"
+            textClass={fc.tiny}
+          />
 
           {/* Search — only for agents view */}
           {viewMode === "agents" && (

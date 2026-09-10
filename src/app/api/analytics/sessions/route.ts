@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionAnalytics } from "@/lib/db";
 import { readProvider } from "@/lib/provider-param";
+import { invalidMachineResponse, readMachine } from "@/lib/machine-param";
 import type { ApiResponse, SessionAnalyticRow } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Se
   try {
     const url = new URL(req.url);
     const provider = readProvider(url);
+    const machine = readMachine(url);
+    if (machine === null) return invalidMachineResponse();
     const now = Date.now();
     const from = parseInt(url.searchParams.get("from") || String(now - 7 * 86400000));
     const to = parseInt(url.searchParams.get("to") || String(now));
@@ -17,7 +20,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Se
     const limit = Math.min(parseInt(url.searchParams.get("limit") || "20"), 100);
     const offset = parseInt(url.searchParams.get("offset") || "0");
 
-    const data = getSessionAnalytics(from, to, sort, order, limit, offset, provider);
+    const data = getSessionAnalytics(from, to, sort, order, limit, offset, provider, machine);
     return NextResponse.json({ success: true, data });
   } catch (error) {
     return NextResponse.json(

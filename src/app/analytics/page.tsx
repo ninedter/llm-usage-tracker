@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { useAnalytics, type AnalyticsTab } from "@/hooks/use-analytics";
+import { useMachines } from "@/hooks/use-machines";
 import { NavLinks } from "@/components/ui/NavLinks";
 import { ProviderFilter } from "@/components/ui/ProviderFilter";
+import { MachineFilter } from "@/components/ui/MachineFilter";
 import { TimeRangePicker } from "@/components/analytics/TimeRangePicker";
 import { OverviewCards } from "@/components/analytics/OverviewCards";
 import { TrendChart } from "@/components/analytics/TrendChart";
@@ -19,6 +21,7 @@ export default function AnalyticsPage() {
   const {
     preset, setPreset, setCustomRange,
     provider, setProvider,
+    machine, setMachine,
     overview, trends, sessions,
     toolAnalytics, fileAnalytics, modelAnalytics, insights,
     overviewLoading, trendsLoading, sessionsLoading,
@@ -26,6 +29,8 @@ export default function AnalyticsPage() {
     sessionSort, setSessionSort,
     sessionPage, setSessionPage,
   } = useAnalytics(activeTab);
+
+  const machines = useMachines();
 
   return (
     <div className="mx-auto flex w-full flex-1 flex-col px-4 pb-4">
@@ -38,6 +43,7 @@ export default function AnalyticsPage() {
         </div>
         <div className="titlebar-no-drag flex flex-wrap items-center gap-3 gap-y-2">
           <ProviderFilter value={provider} onChange={setProvider} />
+          <MachineFilter machines={machines} value={machine} onChange={setMachine} />
           <TimeRangePicker
             preset={preset}
             onPresetChange={setPreset}

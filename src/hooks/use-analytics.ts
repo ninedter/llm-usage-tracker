@@ -3,6 +3,7 @@
 import { useState, useCallback, useMemo } from "react";
 import useSWR from "swr";
 import { providerParam, type ProviderFilterValue } from "@/components/ui/ProviderFilter";
+import { machineParam, ALL_MACHINES, type MachineFilterValue } from "@/components/ui/MachineFilter";
 import type {
   ApiResponse,
   AnalyticsOverview,
@@ -46,6 +47,7 @@ export function useAnalytics(activeTab: AnalyticsTab) {
   const [preset, setPresetState] = useState<Preset>("7d");
   const [customRange, setCustomRangeState] = useState<{ from: number; to: number } | null>(null);
   const [provider, setProvider] = useState<ProviderFilterValue>("all");
+  const [machine, setMachine] = useState<MachineFilterValue>(ALL_MACHINES);
 
   const timeRange = useMemo(() => {
     if (customRange) return customRange;
@@ -61,9 +63,10 @@ export function useAnalytics(activeTab: AnalyticsTab) {
     setCustomRangeState({ from, to });
   }, []);
 
-  // Every panel below keys off `params`, so appending the provider here is what
-  // scopes all seven queries at once.
-  const params = `from=${timeRange.from}&to=${timeRange.to}${providerParam(provider)}`;
+  // Every panel below keys off `params`, so appending the provider and machine
+  // here is what scopes all seven queries at once. Both helpers emit nothing
+  // for "all", leaving the request unscoped on that axis.
+  const params = `from=${timeRange.from}&to=${timeRange.to}${providerParam(provider)}${machineParam(machine)}`;
   const swrOpts = { revalidateOnFocus: false, refreshInterval: 60_000 };
 
   // Inactive tabs get a null SWR key: no fetch, no 60s polling, until the
@@ -110,6 +113,8 @@ export function useAnalytics(activeTab: AnalyticsTab) {
     setCustomRange,
     provider,
     setProvider,
+    machine,
+    setMachine,
     overview: overview || null,
     trends: trends || [],
     sessions: sessions || [],

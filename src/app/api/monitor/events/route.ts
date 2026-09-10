@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { listRecentEvents } from "@/lib/db";
 import { maybeRollupDaily, processMonitorEvent, validateEventInput } from "@/lib/monitor-ingest";
 import { readProvider } from "@/lib/provider-param";
+import { invalidMachineResponse, readMachine } from "@/lib/machine-param";
 import type { ApiResponse, AgentEvent } from "@/types";
 
 // GET /api/monitor/events — Newest events across all agents (optionally one
@@ -10,9 +11,11 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Ag
   try {
     const url = new URL(req.url);
     const provider = readProvider(url);
+    const machine = readMachine(url);
+    if (machine === null) return invalidMachineResponse();
     const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "100", 10) || 100, 1), 500);
 
-    const events = listRecentEvents(limit, provider);
+    const events = listRecentEvents(limit, provider, machine);
     return NextResponse.json({ success: true, data: events });
   } catch (error) {
     return NextResponse.json(

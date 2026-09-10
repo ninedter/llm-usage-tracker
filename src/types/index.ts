@@ -193,6 +193,11 @@ export interface MachineSummary {
   last_seen_at: number;
 }
 
+// GET /api/hub-info — runtime config the browser can't read from the bundle.
+export interface HubInfo {
+  hub_url: string;
+}
+
 // Result of one POST /api/ingest/v1 batch.
 export interface IngestResult {
   machine_id: string;
