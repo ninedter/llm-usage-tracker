@@ -159,7 +159,7 @@ Install the DMG (or run `npx electron .` after a build). The app attaches to the
 
 ```bash
 npm run dev            # Next.js dev server (UI + API) on :3000
-npm test               # vitest — 133 tests
+npm test               # vitest — 155 tests
 npm run electron:dev   # hot-reload Next.js + Electron shell
 ```
 
@@ -378,7 +378,7 @@ llm-usage-tracker/
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Next.js dev server (UI + API + Codex watcher) |
-| `npm test` | vitest suite (133 tests: schema, queries, purge, providers, codex ingest, claude transcripts, throttles, SSE) |
+| `npm test` | vitest suite (155 tests: schema, queries, purge, providers, codex ingest, claude transcripts, throttles, SSE) |
 | `npm run build` | Production build (standalone output + static assets) |
 | `npm run electron:dev` | Hot-reload development with the Electron shell |
 | `npm run electron:build` | Clean → build → compile → package DMG + zip |
