@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getFileAnalytics } from "@/lib/db";
 import { readProvider } from "@/lib/provider-param";
+import { invalidMachineResponse, readMachine } from "@/lib/machine-param";
 import type { ApiResponse, FileAnalytics } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -9,11 +10,13 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Fi
   try {
     const url = new URL(req.url);
     const provider = readProvider(url);
+    const machine = readMachine(url);
+    if (machine === null) return invalidMachineResponse();
     const now = Date.now();
     const from = parseInt(url.searchParams.get("from") || String(now - 7 * 86400000));
     const to = parseInt(url.searchParams.get("to") || String(now));
 
-    const data = getFileAnalytics(from, to, provider);
+    const data = getFileAnalytics(from, to, provider, machine);
     return NextResponse.json({ success: true, data });
   } catch (error) {
     return NextResponse.json(

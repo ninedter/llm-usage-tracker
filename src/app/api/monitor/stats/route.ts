@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMonitorStats, abandonStaleSessions, archiveStaleAgents, runRetentionIfDue } from "@/lib/db";
 import { readProvider } from "@/lib/provider-param";
+import { invalidMachineResponse, readMachine } from "@/lib/machine-param";
 import type { ApiResponse, MonitorStats } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Mo
   try {
     const url = new URL(req.url);
     const provider = readProvider(url);
+    const machine = readMachine(url);
+    if (machine === null) return invalidMachineResponse();
 
     // Clean up stale sessions periodically (runs every ~30s via SWR refresh).
     // These sweeps stay global — retiring a finished agent isn't something the
@@ -17,7 +20,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Mo
     archiveStaleAgents();
     try { runRetentionIfDue(Date.now()); } catch (e) { console.error("[retention] auto-purge failed:", e); }
 
-    const stats = getMonitorStats(provider);
+    const stats = getMonitorStats(provider, machine);
     return NextResponse.json({ success: true, data: stats });
   } catch (error) {
     return NextResponse.json(

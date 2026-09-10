@@ -6,6 +6,7 @@ import { NavLinks } from "@/components/ui/NavLinks";
 import { CredentialForm } from "@/components/settings/CredentialForm";
 import { ProviderStatus } from "@/components/settings/ProviderStatus";
 import { DataManagement } from "@/components/settings/DataManagement";
+import { HubInfo } from "@/components/settings/HubInfo";
 
 // Mirrors the FONT_CLASSES "base" tier so the preview matches the real panel
 const FONT_PREVIEW: Record<MonitorFontSize, string> = {
@@ -21,7 +22,7 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 pb-8">
-      {/* Header — draggable for Electron window movement */}
+      {/* Header */}
       <div className="titlebar-drag mb-6 flex items-center justify-between pt-2">
         <div>
           <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
@@ -35,6 +36,8 @@ export default function SettingsPage() {
           <NavLinks current="/settings" />
         </div>
       </div>
+
+      <HubInfo />
 
       {/* Agent Monitor Display Settings */}
       <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">

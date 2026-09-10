@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAgent, listAgents } from "@/lib/db";
 import { readProvider } from "@/lib/provider-param";
+import { invalidMachineResponse, readMachine } from "@/lib/machine-param";
 import { broadcastEvent } from "@/lib/ws";
 import type { ApiResponse, AgentRecord } from "@/types";
 
@@ -50,10 +51,12 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Ag
     const status = url.searchParams.get("status") || undefined;
     const type = url.searchParams.get("type") || undefined;
     const provider = readProvider(url);
+    const machine = readMachine(url);
+    if (machine === null) return invalidMachineResponse();
     const limit = Math.min(parseInt(url.searchParams.get("limit") || "100"), 500);
     const offset = parseInt(url.searchParams.get("offset") || "0");
 
-    const agents = listAgents({ session_id, status, type, provider, limit, offset });
+    const agents = listAgents({ session_id, status, type, provider, machine_id: machine, limit, offset });
     return NextResponse.json({ success: true, data: agents });
   } catch (error) {
     return NextResponse.json(

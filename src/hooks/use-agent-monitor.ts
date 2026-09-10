@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import useSWR from "swr";
 import { mergeRecentActivity, ACTIVITY_FEED_CAP } from "@/lib/activity-merge";
 import type { ProviderFilterValue } from "@/components/ui/ProviderFilter";
+import { ALL_MACHINES, type MachineFilterValue } from "@/components/ui/MachineFilter";
 import type { ApiResponse, AgentRecord, AgentEvent, AgentSession, MonitorStats } from "@/types";
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -14,6 +15,16 @@ async function fetcher<T>(url: string): Promise<T> {
 }
 
 const MAX_AGENT_EVENTS = 200;
+
+// The REST fetches are already scoped server-side; these mirror that scoping
+// for rows that arrive over the global SSE stream, which carries no
+// per-connection filter. A row that can't prove it belongs to the selected
+// scope stays hidden, which is how the provider filter has always behaved.
+const inProviderScope = (rowProvider: string | undefined, scope: ProviderFilterValue) =>
+  scope === "all" || rowProvider === scope;
+
+const inMachineScope = (rowMachine: string | undefined, scope: MachineFilterValue) =>
+  scope === ALL_MACHINES || rowMachine === scope;
 
 const STATUS_PRIORITY: Record<string, number> = {
   working: 0,
@@ -29,23 +40,39 @@ export function useAgentMonitor() {
   const [recentActivity, setRecentActivity] = useState<AgentEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [provider, setProviderRaw] = useState<ProviderFilterValue>("all");
+  const [machine, setMachineRaw] = useState<MachineFilterValue>(ALL_MACHINES);
   const eventSourceRef = useRef<EventSource | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Current provider scope, readable from the SSE handler (which subscribes
-  // once with empty deps and would otherwise close over the initial value).
+  // Current provider/machine scope, readable from the SSE handler (which
+  // subscribes once with empty deps and would otherwise close over the
+  // initial values).
   const providerRef = useRef<ProviderFilterValue>("all");
+  const machineRef = useRef<MachineFilterValue>(ALL_MACHINES);
 
-  const pq = provider === "all" ? "" : `provider=${provider}`;
+  const pq = [
+    provider === "all" ? "" : `provider=${provider}`,
+    machine === ALL_MACHINES ? "" : `machine=${encodeURIComponent(machine)}`,
+  ].filter(Boolean).join("&");
 
-  // Switching provider must drop the merge-only caches, or agents from the tab
+  // Switching scope must drop the merge-only caches, or rows from the scope
   // you just left would linger (SWR onSuccess and SSE both only ever add).
-  const setProviderAndReset = useCallback((p: ProviderFilterValue) => {
-    providerRef.current = p;
-    setProviderRaw(p);
+  const resetCaches = useCallback(() => {
     setAgents(new Map());
     setEvents(new Map());
     setRecentActivity([]);
   }, []);
+
+  const setProviderAndReset = useCallback((p: ProviderFilterValue) => {
+    providerRef.current = p;
+    setProviderRaw(p);
+    resetCaches();
+  }, [resetCaches]);
+
+  const setMachineAndReset = useCallback((m: MachineFilterValue) => {
+    machineRef.current = m;
+    setMachineRaw(m);
+    resetCaches();
+  }, [resetCaches]);
 
   // Initial fetch of all agents — each successful fetch seeds the agents map
   const { mutate: refetchAgents } = useSWR<AgentRecord[]>(
@@ -78,11 +105,12 @@ export function useAgentMonitor() {
       revalidateOnFocus: false,
       refreshInterval: 60_000,
       onSuccess: (fetched) => {
-        // A fetch for the previous scope can resolve after a provider switch
+        // A fetch for the previous scope can resolve after a filter switch
         // already reset the feed — trim to the scope that's current *now* so
         // out-of-scope rows never occupy slots in the capped feed.
-        const scope = providerRef.current;
-        const inScope = scope === "all" ? fetched : fetched.filter((e) => e.provider === scope);
+        const inScope = fetched.filter(
+          (e) => inProviderScope(e.provider, providerRef.current) && inMachineScope(e.machine_id, machineRef.current)
+        );
         setRecentActivity((prev) => mergeRecentActivity(prev, inScope));
       },
     }
@@ -143,13 +171,16 @@ export function useAgentMonitor() {
             return next;
           });
           // Add to the recent activity feed — but only events in the current
-          // provider scope. The feed is capped, so letting a chatty provider's
-          // stream in while another is selected would evict the hydrated
-          // history the user is actually looking at. The merge keeps order,
-          // dedupes against rows the hydration fetch already delivered, and
-          // enforces the cap.
-          const scope = providerRef.current;
-          if (scope === "all" || event.provider === scope) {
+          // provider *and* machine scope. The stream itself is global (the SSE
+          // protocol carries no subscription filter), and the feed is capped,
+          // so letting a chatty machine's stream in while another is selected
+          // would evict the hydrated history the user is actually looking at.
+          // The merge keeps order, dedupes against rows the hydration fetch
+          // already delivered, and enforces the cap.
+          if (
+            inProviderScope(event.provider, providerRef.current) &&
+            inMachineScope(event.machine_id, machineRef.current)
+          ) {
             setRecentActivity((prev) => mergeRecentActivity(prev, [event]));
           }
         }
@@ -201,27 +232,27 @@ export function useAgentMonitor() {
   }, []);
 
   // Memoized computed values — only recalculate when agents map changes.
-  // The provider check is a safety net: SSE pushes agents of every provider
-  // into the map regardless of what the fetches were scoped to.
+  // The scope checks are a safety net: SSE pushes agents from every provider
+  // and machine into the map regardless of what the fetches were scoped to.
   const agentList = useMemo(() =>
     Array.from(agents.values())
       .filter((a) => a.status !== "archived")
-      .filter((a) => provider === "all" || a.provider === provider)
+      .filter((a) => inProviderScope(a.provider, provider) && inMachineScope(a.machine_id, machine))
       .sort((a, b) => {
       const pa = STATUS_PRIORITY[a.status] ?? 3;
       const pb = STATUS_PRIORITY[b.status] ?? 3;
       if (pa !== pb) return pa - pb;
       return b.started_at - a.started_at;
     }),
-    [agents, provider]
+    [agents, provider, machine]
   );
 
   // Insertion into recentActivity is already scope-filtered (SSE and the
-  // hydration fetch both check providerRef); this is a display-level safety
+  // hydration fetch both check the refs); this is a display-level safety
   // net for anything that slips through around a scope switch.
   const visibleActivity = useMemo(
-    () => (provider === "all" ? recentActivity : recentActivity.filter((e) => e.provider === provider)),
-    [recentActivity, provider]
+    () => recentActivity.filter((e) => inProviderScope(e.provider, provider) && inMachineScope(e.machine_id, machine)),
+    [recentActivity, provider, machine]
   );
 
   const { workingAgents, idleAgents } = useMemo(() => {
@@ -253,6 +284,8 @@ export function useAgentMonitor() {
   return {
     provider,
     setProvider: setProviderAndReset,
+    machine,
+    setMachine: setMachineAndReset,
     agents: agentList,
     workingAgents,
     idleAgents,

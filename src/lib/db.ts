@@ -597,10 +597,10 @@ export function listEvents(agentId: string, filters?: {
 // Newest events across every agent — hydrates the Activity feed, which would
 // otherwise show only events broadcast over SSE while the page happens to be
 // open (Codex backfill, for one, is never broadcast).
-export function listRecentEvents(limit = 100, provider?: DbProvider): AgentEvent[] {
+export function listRecentEvents(limit = 100, provider?: DbProvider, machineId?: string): AgentEvent[] {
   return getDb().prepare(
-    `SELECT * FROM agent_events${provider ? " WHERE provider = ?" : ""} ORDER BY timestamp DESC, id DESC LIMIT ?`
-  ).all(...pArg(provider), limit) as AgentEvent[];
+    `SELECT * FROM agent_events WHERE 1=1${pSql("", provider, machineId)} ORDER BY timestamp DESC, id DESC LIMIT ?`
+  ).all(...pArg(provider, machineId), limit) as AgentEvent[];
 }
 
 export function listSessionEvents(sessionId: string, filters?: {
@@ -754,21 +754,24 @@ export function listMachines(): import("@/types").MachineSummary[] {
 
 // --- Stats ---
 
-export function getMonitorStats(provider?: DbProvider): MonitorStats {
+export function getMonitorStats(provider?: DbProvider, machineId?: string): MonitorStats {
   const d = getDb();
-  const pa = pArg(provider);
-  const eP = pSql("provider", provider);
+  const pa = pArg(provider, machineId);
+  const eP = pSql("", provider, machineId);
 
   const sessions = d.prepare(
     `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active FROM sessions WHERE 1=1${eP}`
   ).get(...pa) as { total: number; active: number };
 
-  // agents inherits provider from its session, so scoping needs the join
+  // agents inherits provider from its session, so provider scoping needs the
+  // join — machine_id it owns, so that one filters the agent row directly and
+  // survives an agent whose session row was purged. Emitted provider-then-
+  // machine to match the order pArg spreads them in.
   const agents = d.prepare(`
     SELECT COUNT(*) as total, SUM(CASE WHEN a.status = 'working' THEN 1 ELSE 0 END) as working
     FROM agents a
     LEFT JOIN sessions s ON s.id = a.session_id AND s.machine_id = a.machine_id
-    WHERE 1=1${pSql("s.provider", provider)}
+    WHERE 1=1${pSql("s.", provider)}${pSql("a.", undefined, machineId)}
   `).get(...pa) as { total: number; working: number };
 
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -1076,19 +1079,28 @@ export function rollupDailyUsageRange(from: number, to: number): void {
 
 // --- Analytics Queries ---
 
-// --- Provider scoping ---
+// --- Provider / machine scoping ---
 //
-// Every analytics query below takes an optional provider. `provider` lives on
-// sessions / agent_events / token_usage, so scoping is a single extra clause.
-// The one exception is daily_usage, which has no provider column — the two
-// queries that read it fall back to a live token_usage join when scoped (see
-// providerCostRows).
-const pSql = (col: string, provider?: DbProvider) => (provider ? ` AND ${col} = ?` : "");
-const pArg = (provider?: DbProvider): unknown[] => (provider ? [provider] : []);
+// Every analytics query below takes an optional provider and machine. Both
+// `provider` and `machine_id` live on sessions / agent_events / token_usage, so
+// scoping is one extra clause each; `prefix` is the table alias they hang off
+// ("" or "s." / "ae."). pSql and pArg emit the two filters in the same order,
+// so a call site only has to interpolate the fragment and spread the args.
+//
+// daily_usage is the exception: it carries machine_id but no provider column,
+// so the two queries that read it fall back to a live token_usage join when a
+// provider is selected (see providerCostRows) and filter machine_id directly.
+const pSql = (prefix: string, provider?: DbProvider, machineId?: string) =>
+  `${provider ? ` AND ${prefix}provider = ?` : ""}${machineId ? ` AND ${prefix}machine_id = ?` : ""}`;
+const pArg = (provider?: DbProvider, machineId?: string): unknown[] =>
+  [...(provider ? [provider] : []), ...(machineId ? [machineId] : [])];
+
+// machine_id filter for daily_usage, which has no alias and no provider column.
+const mSql = (machineId?: string) => (machineId ? " AND machine_id = ?" : "");
 
 // Per-day cost/tokens for a single provider, derived live from token_usage
 // because the daily_usage rollup isn't provider-aware.
-function providerCostRows(from: number, to: number, provider: DbProvider) {
+function providerCostRows(from: number, to: number, provider: DbProvider, machineId?: string) {
   return getDb().prepare(`
     SELECT
       strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch', 'localtime') as date,
@@ -1096,19 +1108,19 @@ function providerCostRows(from: number, to: number, provider: DbProvider) {
       SUM(t.input_tokens + t.output_tokens) as tokens
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
-    WHERE s.started_at >= ? AND s.started_at < ? AND s.provider = ?
+    WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.", provider, machineId)}
     GROUP BY date
-  `).all(from, to, provider) as { date: string; cost: number; tokens: number }[];
+  `).all(from, to, ...pArg(provider, machineId)) as { date: string; cost: number; tokens: number }[];
 }
 
-export function getAnalyticsOverview(from: number, to: number, provider?: DbProvider): import("@/types").AnalyticsOverview {
+export function getAnalyticsOverview(from: number, to: number, provider?: DbProvider, machineId?: string): import("@/types").AnalyticsOverview {
   const d = getDb();
   const periodLength = to - from;
   const prevFrom = from - periodLength;
   const prevTo = from;
-  const sP = pSql("s.provider", provider);
-  const eP = pSql("provider", provider);
-  const pa = pArg(provider);
+  const sP = pSql("s.", provider, machineId);
+  const eP = pSql("", provider, machineId);
+  const pa = pArg(provider, machineId);
 
   // Token/cost data (may be empty if no API usage tracking)
   const tokenData = d.prepare(`
@@ -1199,11 +1211,11 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
   };
 }
 
-export function getAnalyticsTrends(from: number, to: number, granularity: "hourly" | "daily", provider?: DbProvider): import("@/types").TrendPoint[] {
+export function getAnalyticsTrends(from: number, to: number, granularity: "hourly" | "daily", provider?: DbProvider, machineId?: string): import("@/types").TrendPoint[] {
   const d = getDb();
   const bucketExpr = granularity === "daily" ? "%Y-%m-%d" : "%Y-%m-%dT%H:00";
-  const eP = pSql("provider", provider);
-  const pa = pArg(provider);
+  const eP = pSql("", provider, machineId);
+  const pa = pArg(provider, machineId);
 
   // Sessions counted from the sessions table directly — a day with sessions
   // must show even when no token/cost data was captured for it.
@@ -1221,18 +1233,19 @@ export function getAnalyticsTrends(from: number, to: number, granularity: "hourl
     GROUP BY date
   `).all(from, to, ...pa) as { date: string; n: number }[];
 
-  // daily_usage has no provider column, so a scoped request reads token_usage
-  // live instead of the rollup.
+  // daily_usage has no provider column, so a provider-scoped request reads
+  // token_usage live instead of the rollup. machine_id it does have, so a
+  // machine-only scope still gets the cheap rollup path.
   const costRows = granularity !== "daily"
     ? []
     : provider
-      ? providerCostRows(from, to, provider)
+      ? providerCostRows(from, to, provider, machineId)
       : d.prepare(`
           SELECT date, SUM(cost) as cost, SUM(input_tokens + output_tokens) as tokens
           FROM daily_usage
-          WHERE date >= ? AND date <= ?
+          WHERE date >= ? AND date <= ?${mSql(machineId)}
           GROUP BY date
-        `).all(localDateStr(from), localDateStr(to)) as { date: string; cost: number; tokens: number }[];
+        `).all(localDateStr(from), localDateStr(to), ...pArg(undefined, machineId)) as { date: string; cost: number; tokens: number }[];
 
   const sessions = new Map(sessionRows.map(r => [r.date, r.n]));
   const events = new Map(eventRows.map(r => [r.date, r.n]));
@@ -1273,7 +1286,7 @@ export function getAnalyticsTrends(from: number, to: number, granularity: "hourl
   return points;
 }
 
-export function getSessionAnalytics(from: number, to: number, sort = "started_at", order = "desc", limit = 20, offset = 0, provider?: DbProvider): import("@/types").SessionAnalyticRow[] {
+export function getSessionAnalytics(from: number, to: number, sort = "started_at", order = "desc", limit = 20, offset = 0, provider?: DbProvider, machineId?: string): import("@/types").SessionAnalyticRow[] {
   const d = getDb();
   const validSorts: Record<string, string> = {
     started_at: "s.started_at",
@@ -1306,16 +1319,16 @@ export function getSessionAnalytics(from: number, to: number, sort = "started_at
       SELECT machine_id, session_id, COUNT(*) AS tool_count
       FROM agent_events WHERE event_type = 'tool_call' GROUP BY machine_id, session_id
     ) ec ON ec.session_id = s.id AND ec.machine_id = s.machine_id
-    WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.provider", provider)}
+    WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.", provider, machineId)}
     ORDER BY ${sortCol} ${sortOrder}
     LIMIT ? OFFSET ?
-  `).all(Date.now(), from, to, ...pArg(provider), limit, offset) as import("@/types").SessionAnalyticRow[];
+  `).all(Date.now(), from, to, ...pArg(provider, machineId), limit, offset) as import("@/types").SessionAnalyticRow[];
 }
 
-export function getToolAnalytics(from: number, to: number, provider?: DbProvider): import("@/types").ToolAnalytics {
+export function getToolAnalytics(from: number, to: number, provider?: DbProvider, machineId?: string): import("@/types").ToolAnalytics {
   const d = getDb();
-  const eP = pSql("provider", provider);
-  const pa = pArg(provider);
+  const eP = pSql("", provider, machineId);
+  const pa = pArg(provider, machineId);
 
   const tools = d.prepare(`
     SELECT
@@ -1393,15 +1406,15 @@ export function getToolAnalytics(from: number, to: number, provider?: DbProvider
   return { tools, timeline: timeline.reverse() };
 }
 
-export function getFileAnalytics(from: number, to: number, provider?: DbProvider): import("@/types").FileAnalytics {
+export function getFileAnalytics(from: number, to: number, provider?: DbProvider, machineId?: string): import("@/types").FileAnalytics {
   const d = getDb();
 
   const rows = d.prepare(`
     SELECT files_affected, tool_name
     FROM agent_events
     WHERE files_affected IS NOT NULL AND files_affected != ''
-      AND timestamp >= ? AND timestamp < ?${pSql("provider", provider)}
-  `).all(from, to, ...pArg(provider)) as { files_affected: string; tool_name: string | null }[];
+      AND timestamp >= ? AND timestamp < ?${pSql("", provider, machineId)}
+  `).all(from, to, ...pArg(provider, machineId)) as { files_affected: string; tool_name: string | null }[];
 
   const fileMap = new Map<string, { count: number; tools: Map<string, number> }>();
 
@@ -1448,7 +1461,7 @@ export function getFileAnalytics(from: number, to: number, provider?: DbProvider
   return { files, directories };
 }
 
-export function getModelAnalytics(from: number, to: number, provider?: DbProvider): import("@/types").ModelAnalytics {
+export function getModelAnalytics(from: number, to: number, provider?: DbProvider, machineId?: string): import("@/types").ModelAnalytics {
   const d = getDb();
 
   const models = d.prepare(`
@@ -1461,10 +1474,10 @@ export function getModelAnalytics(from: number, to: number, provider?: DbProvide
       SUM(t.cache_write_tokens) as cache_write_tokens
     FROM token_usage t
     JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
-    WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.provider", provider)}
+    WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.", provider, machineId)}
     GROUP BY t.model
     ORDER BY cost DESC
-  `).all(from, to, ...pArg(provider)) as import("@/types").ModelEntry[];
+  `).all(from, to, ...pArg(provider, machineId)) as import("@/types").ModelEntry[];
 
   // Same daily_usage limitation as getAnalyticsTrends: no provider column, so a
   // scoped request bucket-sums token_usage live instead.
@@ -1477,17 +1490,17 @@ export function getModelAnalytics(from: number, to: number, provider?: DbProvide
           SUM(t.input_tokens + t.output_tokens) as tokens
         FROM token_usage t
         JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
-        WHERE s.started_at >= ? AND s.started_at < ? AND s.provider = ?
+        WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.", provider, machineId)}
         GROUP BY date, t.model
         ORDER BY date ASC
-      `).all(from, to, provider) as import("@/types").ModelTrendPoint[]
+      `).all(from, to, ...pArg(provider, machineId)) as import("@/types").ModelTrendPoint[]
     : d.prepare(`
         SELECT date, model, SUM(cost) as cost, SUM(input_tokens + output_tokens) as tokens
         FROM daily_usage
-        WHERE date >= ? AND date <= ?
+        WHERE date >= ? AND date <= ?${mSql(machineId)}
         GROUP BY date, model
         ORDER BY date ASC
-      `).all(localDateStr(from), localDateStr(to)) as import("@/types").ModelTrendPoint[];
+      `).all(localDateStr(from), localDateStr(to), ...pArg(undefined, machineId)) as import("@/types").ModelTrendPoint[];
 
   return { models, trend };
 }
@@ -1500,12 +1513,12 @@ export function getModelAnalytics(from: number, to: number, provider?: DbProvide
 const EXPLORE_TOOLS = "('Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'web_search')";
 const MODIFY_TOOLS = "('Edit', 'Write', 'NotebookEdit', 'apply_patch')";
 
-export function getUsageInsights(from: number, to: number, provider?: DbProvider): import("@/types").UsageInsights {
+export function getUsageInsights(from: number, to: number, provider?: DbProvider, machineId?: string): import("@/types").UsageInsights {
   const d = getDb();
-  const eP = pSql("provider", provider);
-  const aeP = pSql("ae.provider", provider);
-  const sP = pSql("s.provider", provider);
-  const pa = pArg(provider);
+  const eP = pSql("", provider, machineId);
+  const aeP = pSql("ae.", provider, machineId);
+  const sP = pSql("s.", provider, machineId);
+  const pa = pArg(provider, machineId);
 
   const heatmap = d.prepare(`
     SELECT

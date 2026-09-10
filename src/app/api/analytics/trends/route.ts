@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAnalyticsTrends, maybeRollupRange } from "@/lib/db";
 import { readProvider } from "@/lib/provider-param";
+import { invalidMachineResponse, readMachine } from "@/lib/machine-param";
 import type { ApiResponse, TrendPoint } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Tr
   try {
     const url = new URL(req.url);
     const provider = readProvider(url);
+    const machine = readMachine(url);
+    if (machine === null) return invalidMachineResponse();
     const now = Date.now();
     const from = parseInt(url.searchParams.get("from") || String(now - 7 * 86400000));
     const to = parseInt(url.searchParams.get("to") || String(now));
@@ -17,7 +20,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Tr
 
     maybeRollupRange(from, to);
 
-    const data = getAnalyticsTrends(from, to, granularity, provider);
+    const data = getAnalyticsTrends(from, to, granularity, provider, machine);
     return NextResponse.json({ success: true, data });
   } catch (error) {
     return NextResponse.json(

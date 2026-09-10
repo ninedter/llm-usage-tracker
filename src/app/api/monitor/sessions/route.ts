@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listSessions } from "@/lib/db";
 import { readProvider } from "@/lib/provider-param";
+import { invalidMachineResponse, readMachine } from "@/lib/machine-param";
 import type { ApiResponse, AgentSession } from "@/types";
 
 // GET /api/monitor/sessions — List all sessions (optionally one provider)
@@ -8,8 +9,10 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiResponse<Ag
   try {
     const url = new URL(req.url);
     const provider = readProvider(url);
+    const machine = readMachine(url);
+    if (machine === null) return invalidMachineResponse();
 
-    const sessions = listSessions(50, provider);
+    const sessions = listSessions(50, provider, machine);
     return NextResponse.json({ success: true, data: sessions });
   } catch (error) {
     return NextResponse.json(
