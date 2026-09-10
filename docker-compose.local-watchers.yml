@@ -1,0 +1,16 @@
+# Optional overlay: let the tracker also watch its OWN host's logs, the way the
+# single-machine setup did before multi-machine ingest existed.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local-watchers.yml up -d
+#
+# Use this when the box running the hub has no separate edge agent posting to
+# /api/ingest/v1. Running both at once would double-count that machine.
+services:
+  tracker:
+    volumes:
+      - llm-tracker-data:/data
+      # Codex CLI login, read-only — tokens stay managed by `codex` on the host
+      - ~/.codex:/codex:ro
+      # Claude Code transcripts, read-only — the claude-watcher derives
+      # per-model token usage from them (hooks don't carry token counts)
+      - ~/.claude/projects:/claude-projects:ro

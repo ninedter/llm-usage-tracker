@@ -10,8 +10,19 @@ services:
       # Match the host timezone — SQLite 'localtime' day bucketing must agree
       # with the user's calendar or sessions land on the wrong day
       TZ: ${TZ:-Asia/Phnom_Penh}
-    # Provides ENCRYPTION_KEY — the standalone server doesn't load dotenv files,
-    # and without a stable key the stored credentials can't be decrypted
+      # Shared bearer token for POST /api/ingest/v1. Unset/empty means the hub
+      # refuses every ingest with 503 rather than accepting anonymous writes —
+      # so a hub deployment MUST set this in .env.local:
+      #   echo "INGEST_TOKEN=$(openssl rand -hex 32)" >> .env.local
+      INGEST_TOKEN: ${INGEST_TOKEN:-}
+      # Where edge machines post their batches. Env-only by design: no hostname
+      # is hardcoded in TypeScript. Note that NEXT_PUBLIC_* is inlined at build
+      # time by Next.js, so browser code that reads it needs a rebuild — today
+      # only edge agents and docs consume this value.
+      NEXT_PUBLIC_HUB_URL: ${NEXT_PUBLIC_HUB_URL:-http://henrys-mac-mini:3789}
+    # Provides ENCRYPTION_KEY and INGEST_TOKEN — the standalone server doesn't
+    # load dotenv files, and without a stable key the stored credentials can't
+    # be decrypted
     env_file:
       - .env.local
     volumes:
@@ -23,11 +34,19 @@ services:
       # Named volumes live on real ext4 inside the VM, where WAL works.
       # For host access to the DB, use `npm run db:export`.
       - llm-tracker-data:/data
-      # Codex CLI login, read-only — tokens stay managed by `codex` on the host
-      - ~/.codex:/codex:ro
-      # Claude Code transcripts, read-only — the claude-watcher derives
-      # per-model token usage from them (hooks don't carry token counts)
-      - ~/.claude/projects:/claude-projects:ro
+      #
+      # The host's ~/.codex and ~/.claude/projects are deliberately NOT mounted
+      # here. In the multi-machine setup each machine runs its own watchers and
+      # posts to the hub's /api/ingest/v1, so a hub that also tailed its host's
+      # logs would double-count the machine it happens to run on.
+      #
+      # To keep the old single-machine behaviour (hub also watches its own host):
+      #   docker compose -f docker-compose.yml -f docker-compose.local-watchers.yml up -d
+      #
+      # That override adds the two read-only mounts back. It's a second compose
+      # file rather than a compose profile because profiles gate whole services,
+      # not individual volumes — and a second service would collide with this
+      # one on both the published port and the container name.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

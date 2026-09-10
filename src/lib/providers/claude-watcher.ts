@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, join } from "path";
 import { createSession, getCodexIngest, getSession, upsertCodexIngest, upsertTokenUsage } from "@/lib/db";
+import { LOCAL_MACHINE_ID } from "@/lib/machine";
 import { aggregateGroupUsage, parseClaudeTranscript, type TranscriptScan } from "@/lib/providers/claude-transcript";
 
 const DAY = 86400000;
@@ -159,7 +160,9 @@ export function recomputeSessionGroup(group: SessionGroup): number {
     // Pre-tracker history: transcripts for sessions the hooks never saw still
     // need a sessions row, or the token_usage join hides their usage. Hook-born
     // sessions are left untouched (INSERT OR IGNORE inside createSession).
-    if (!getSession(group.sessionId)) {
+    // Machine-scoped: this watcher only ever reads this host's transcripts, so
+    // a same-id session ingested from another machine must not suppress it.
+    if (!getSession(group.sessionId, LOCAL_MACHINE_ID)) {
       const meta = scans.find((s) => s.cwd) ?? scans[0];
       const firstTs = Math.min(...scans.map((s) => s.firstTs ?? Infinity));
       const lastTs = Math.max(...scans.map((s) => s.lastTs ?? 0), group.lastMtimeMs);
