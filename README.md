@@ -8,7 +8,7 @@ A macOS desktop + always-on Docker application that monitors your AI subscriptio
 ![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-node22--slim-2496ED?logo=docker&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-133%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-155%20passing-brightgreen)
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -23,6 +23,7 @@ A macOS desktop + always-on Docker application that monitors your AI subscriptio
 - [Claude Code hook setup](#claude-code-hook-setup)
 - [Claude token usage (transcripts)](#claude-token-usage-transcripts)
 - [OpenAI / Codex tracking](#openai--codex-tracking)
+- [Multi-machine hub](#multi-machine-hub)
 - [API reference](#api-reference)
 - [Data management & retention](#data-management--retention)
 - [Performance](#performance)
@@ -135,7 +136,13 @@ docker compose up -d --build
 open http://localhost:3789
 ```
 
-That's the whole tracker: dashboard, monitor, analytics, settings, healthcheck (`docker ps` shows `(healthy)`), automatic restarts, Codex log ingestion and Claude transcript token ingestion (your `~/.codex` and `~/.claude/projects` are mounted read-only), and a stable `:3789` target for Claude Code hooks — capturing 24/7 whether or not the desktop app is open.
+That's the whole tracker: dashboard, monitor, analytics, settings, healthcheck (`docker ps` shows `(healthy)`), automatic restarts, and a stable `:3789` target for Claude Code hooks — capturing 24/7 whether or not the desktop app is open.
+
+Codex log ingestion and Claude transcript token ingestion read the *host's* `~/.codex` and `~/.claude/projects`, which the base compose file no longer mounts — in a multi-machine setup each machine watches its own logs and posts to the hub. To have this container also watch its own host (the single-machine setup), add the overlay:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-watchers.yml up -d
+```
 
 ### 2. The desktop app (optional)
 
@@ -199,6 +206,53 @@ Zero setup if you use the Codex CLI:
 - **Activity** — the server tails `~/.codex/sessions/**/rollout-*.jsonl` (4-second tail of today's directory, full rescan once a minute, byte-offset cursors so nothing is re-read), converting Codex turns into the same sessions/agents/events model. In Docker, `~/.codex` is mounted read-only; tokens never leave the machine.
 - In analytics, Codex `exec` shell commands are classified by verb into explore vs. modify so the ratio stays honest across both providers.
 
+## Multi-machine hub
+
+Several machines can report into one always-on tracker. Every usage row carries a `machine_id`:
+
+- **`local`** — written by the in-process watchers and by the unauthenticated `POST /api/monitor/events` path that Claude Code hooks use. A single-machine install only ever sees this, and behaves exactly as before.
+- **anything else** — a stable id (a UUID is ideal) that a remote machine sends with each batch to `POST /api/ingest/v1`.
+
+Session and agent ids come from the provider and are only unique *per machine*, so `machine_id` is part of the primary key of `sessions`, `agents`, `token_usage` and `daily_usage`, and the `source_id` idempotency index on `agent_events` is scoped to `(machine_id, source_id)`. Two machines can report the same session id without colliding. Existing databases are migrated in place on first open, with every pre-existing row backfilled to `local`.
+
+### Running one machine as the hub
+
+```bash
+# On the hub (e.g. henrys-mac-mini, reachable over Tailscale)
+echo "INGEST_TOKEN=$(openssl rand -hex 32)" >> .env.local
+docker compose up -d --build
+```
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `INGEST_TOKEN` | *(unset)* | Shared bearer token for `/api/ingest/v1`. **Unset means every ingest is refused with 503** — a hub on a tailnet must never accept anonymous writes. |
+| `NEXT_PUBLIC_HUB_URL` | `http://henrys-mac-mini:3789` | Where edge machines post. Env-only: no hostname is hardcoded in the app. |
+| `TZ` | `Asia/Phnom_Penh` | Day bucketing for `localtime` rollups. |
+
+Auth v1 is a shared bearer token over plain HTTP on the tailnet — Tailscale provides the transport security. No mTLS, and SQLite stays the single-writer store; a multi-replica VPS deployment would need Postgres instead.
+
+### Posting a batch
+
+```bash
+curl -X POST http://henrys-mac-mini:3789/api/ingest/v1 \
+  -H "Authorization: Bearer $INGEST_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "machine_id": "b6b3f0f4-6f1a-4a1e-9a9f-2f2a6e0f1c34",
+    "label": "MacBook Pro",
+    "events": [
+      { "source_id": "hook:1730000000:1", "agent_id": "agent-1", "session_id": "sess-1",
+        "event_type": "session_start", "agent_project": "my-app", "agent_entrypoint": "cli",
+        "provider": "anthropic", "timestamp": 1730000000000 }
+    ]
+  }'
+# → { "success": true, "data": { "machine_id": "…", "accepted": 1, "duplicates": 0 } }
+```
+
+- `source_id` is a required, stable idempotency key. Replaying a batch is safe: duplicates are counted, never re-inserted, and lifecycle side effects aren't re-run.
+- Batches are capped at 500 events (400 past the cap); a batch is validated in full before anything is written.
+- Events go through the same lifecycle handling as the local hook path — session start/end, agent auto-registration, subagent routing, daily rollup.
+
 ## API reference
 
 All routes return `{ "success": true, "data": ... }` or `{ "success": false, "error": { "code", "message" } }`.
@@ -223,6 +277,8 @@ All routes return `{ "success": true, "data": ... }` or `{ "success": false, "er
 | `/api/monitor/purge` | GET/POST | Preview / run age-based purge (`?days`), keeps daily summaries |
 | `/api/monitor/retention` | GET/POST | Auto-retention setting (daily purge while the tracker runs) |
 | `/api/monitor/clear` | DELETE | Wipe all monitor data |
+| `/api/ingest/v1` | POST | **Multi-machine ingestion** — Bearer-authenticated batch of events from a remote machine (401 without the token, 503 when `INGEST_TOKEN` is unset) |
+| `/api/machines` | GET | Machines the hub has heard from — `id`, `label`, `last_seen_at` |
 | `/api/analytics/overview` | GET | Cost, sessions, tokens, top model, success rate (`?from&to&provider`) |
 | `/api/analytics/trends` | GET | Bucketed activity/cost series (`?granularity=hourly\|daily`) |
 | `/api/analytics/sessions` | GET | Session table (`?sort&order&limit&offset`) |
@@ -312,7 +368,8 @@ llm-usage-tracker/
 │   └── types/
 ├── docs/screenshots/            # README images
 ├── Dockerfile                   # multi-stage; standalone output; HEALTHCHECK /api/live
-├── docker-compose.yml           # :3789, named volume, ~/.codex + ~/.claude/projects ro-mounts, TZ passthrough
+├── docker-compose.yml           # :3789, named volume, TZ/INGEST_TOKEN/NEXT_PUBLIC_HUB_URL passthrough
+├── docker-compose.local-watchers.yml # overlay: also watch this host's ~/.codex + ~/.claude/projects
 └── package.json                 # electron-builder config: standalone ships via extraResources
 ```
 

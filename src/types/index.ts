@@ -121,6 +121,12 @@ export type DbProvider = "anthropic" | "openai";
 
 export interface SessionRecord {
   id: string;
+  // Which machine reported this session. `local` for anything written by the
+  // in-process watchers or the unauthenticated local monitor path; a stable
+  // edge-supplied id for anything that arrived over /api/ingest/v1.
+  machine_id: string;
+  // Display name the edge sent with its last batch, if any.
+  machine_label: string | null;
   status: "active" | "completed" | "error" | "abandoned";
   project: string;
   cwd: string;
@@ -137,6 +143,7 @@ export interface AgentRecord {
   // own). Present on listAgents() rows; absent on plain SELECT * lookups.
   provider?: DbProvider;
   id: string;
+  machine_id: string;
   session_id: string;
   parent_agent_id: string | null;
   type: string; // "main" | "subagent" | agent subtype
@@ -154,6 +161,7 @@ export interface AgentEvent {
   id: number;
   agent_id: string;
   session_id: string;
+  machine_id: string;
   provider: DbProvider;
   source_id: string | null; // Codex dedup key (call_id, or file+lineOffset); null for Claude events
   event_type: AgentEventType;
@@ -166,6 +174,7 @@ export interface AgentEvent {
 }
 
 export interface TokenUsage {
+  machine_id: string;
   session_id: string;
   model: string;
   provider: DbProvider;
@@ -175,6 +184,20 @@ export interface TokenUsage {
   cache_write_tokens: number;
   cost: number;
   updated_at: number;
+}
+
+// One machine known to the hub, for the monitor's machine filter.
+export interface MachineSummary {
+  id: string;
+  label: string | null;
+  last_seen_at: number;
+}
+
+// Result of one POST /api/ingest/v1 batch.
+export interface IngestResult {
+  machine_id: string;
+  accepted: number;
+  duplicates: number;
 }
 
 // Per-file tail cursor for the Codex rollout watcher (backfill + live poll)
@@ -188,6 +211,8 @@ export interface CodexIngestRow {
 
 export interface AgentSession {
   session_id: string;
+  machine_id: string;
+  machine_label: string | null;
   status: string;
   project: string;
   entrypoint: string;
@@ -242,6 +267,7 @@ export interface TrendPoint {
 
 export interface SessionAnalyticRow {
   session_id: string;
+  machine_id: string;
   project: string;
   entrypoint: string;
   status: string;

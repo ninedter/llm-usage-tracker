@@ -1,4 +1,5 @@
 import { openSync, readSync, closeSync, fstatSync } from "fs";
+import { LOCAL_MACHINE_ID } from "@/lib/machine";
 import type { AgentEvent } from "@/types";
 import {
   getDb,
@@ -147,7 +148,7 @@ export function ingestRolloutFile(filePath: string, onEvent?: (e: AgentEvent) =>
       "openai"
     );
 
-    if (!getAgent(agentId)) {
+    if (!getAgent(agentId, LOCAL_MACHINE_ID)) {
       createAgent({
         id: agentId,
         session_id: sessionId,
@@ -184,7 +185,9 @@ export function ingestRolloutFile(filePath: string, onEvent?: (e: AgentEvent) =>
   // createEvent() does INSERT OR IGNORE but still returns a row on a dedup, so
   // it can't tell us whether it actually wrote. Check first — that keeps the
   // inserted count honest and stops us re-broadcasting old events.
-  const alreadySeen = d.prepare("SELECT 1 AS x FROM agent_events WHERE source_id = ? LIMIT 1");
+  // Scoped to the local machine: source_id is only an idempotency key within a
+  // machine now, and a remote edge could mint the same key for its own event.
+  const alreadySeen = d.prepare("SELECT 1 AS x FROM agent_events WHERE machine_id = ? AND source_id = ? LIMIT 1");
 
   let inserted = 0;
   let currentTool: string | null = null;
@@ -196,7 +199,7 @@ export function ingestRolloutFile(filePath: string, onEvent?: (e: AgentEvent) =>
       if (ev.event_type === "tool_call") currentTool = ev.tool_name;
       else if (ev.event_type === "tool_result") currentTool = null;
 
-      if (!ev.source_id || alreadySeen.get(ev.source_id)) continue;
+      if (!ev.source_id || alreadySeen.get(LOCAL_MACHINE_ID, ev.source_id)) continue;
 
       const created = createEvent(
         {

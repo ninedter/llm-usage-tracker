@@ -6,6 +6,7 @@ const ev = (id: number, timestamp: number, provider: DbProvider = "openai"): Age
   id,
   agent_id: `a-${id}`,
   session_id: `s-${id}`,
+  machine_id: "local",
   provider,
   source_id: null,
   event_type: "tool_call",

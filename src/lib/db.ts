@@ -3,6 +3,7 @@ import { join } from "path";
 import { existsSync, mkdirSync, statSync } from "fs";
 import type { AgentRecord, AgentEvent, AgentSession, SessionRecord, TokenUsage, MonitorStats, DbProvider, CodexIngestRow } from "@/types";
 import { extractExecCommand, classifyCommand } from "@/lib/exec-classify";
+import { LOCAL_MACHINE_ID, LOCAL_MACHINE, type MachineCtx } from "@/lib/machine";
 
 let db: Database.Database | null = null;
 
@@ -28,6 +29,153 @@ function getDbPath(): string {
   return join(dataDir, "agent-monitor.db");
 }
 
+// --- Canonical table DDL ---
+//
+// Shared by the fresh-install path and by migrateMachineColumns(): SQLite can't
+// widen a PRIMARY KEY with ALTER TABLE, so the machine_id migration rebuilds
+// these tables from the exact same text a new install gets. Keeping one copy is
+// what stops migrated and fresh DBs from drifting apart.
+
+const CREATE_SESSIONS = `
+  CREATE TABLE IF NOT EXISTS sessions (
+    id              TEXT NOT NULL,
+    machine_id      TEXT NOT NULL DEFAULT 'local',
+    machine_label   TEXT,
+    status          TEXT NOT NULL DEFAULT 'active',
+    project         TEXT NOT NULL DEFAULT '',
+    cwd             TEXT NOT NULL DEFAULT '',
+    entrypoint      TEXT NOT NULL DEFAULT '',
+    provider        TEXT NOT NULL DEFAULT 'anthropic',
+    started_at      INTEGER NOT NULL,
+    ended_at        INTEGER,
+    updated_at      INTEGER NOT NULL,
+    metadata        TEXT,
+    -- Session ids come from the provider and are only unique per machine:
+    -- two edges can legitimately report the same session id string.
+    PRIMARY KEY (machine_id, id)
+  );
+`;
+
+const CREATE_AGENTS = `
+  CREATE TABLE IF NOT EXISTS agents (
+    id              TEXT NOT NULL,
+    machine_id      TEXT NOT NULL DEFAULT 'local',
+    session_id      TEXT NOT NULL,
+    parent_agent_id TEXT,
+    type            TEXT NOT NULL DEFAULT 'main',
+    subagent_type   TEXT,
+    description     TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'idle',
+    current_tool    TEXT,
+    started_at      INTEGER NOT NULL,
+    ended_at        INTEGER,
+    metadata        TEXT,
+    created_at      INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, id),
+    -- Parent lookups are machine-scoped for the same reason. CASCADE rather
+    -- than the old SET NULL: the child key now includes machine_id, which is
+    -- NOT NULL and so can't be nulled out. Every caller deletes a session's
+    -- agents together anyway, so no row outlives its parent today.
+    FOREIGN KEY (machine_id, parent_agent_id) REFERENCES agents(machine_id, id) ON DELETE CASCADE
+  );
+`;
+
+const CREATE_TOKEN_USAGE = `
+  CREATE TABLE IF NOT EXISTS token_usage (
+    machine_id      TEXT NOT NULL DEFAULT 'local',
+    session_id      TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    provider        TEXT NOT NULL DEFAULT 'anthropic',
+    input_tokens    INTEGER NOT NULL DEFAULT 0,
+    output_tokens   INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cost            REAL NOT NULL DEFAULT 0,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, session_id, model)
+  );
+`;
+
+const CREATE_DAILY_USAGE = `
+  CREATE TABLE IF NOT EXISTS daily_usage (
+    machine_id        TEXT NOT NULL DEFAULT 'local',
+    date              TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    project           TEXT NOT NULL DEFAULT '',
+    input_tokens      INTEGER NOT NULL DEFAULT 0,
+    output_tokens     INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cost              REAL NOT NULL DEFAULT 0,
+    session_count     INTEGER NOT NULL DEFAULT 0,
+    tool_calls        INTEGER NOT NULL DEFAULT 0,
+    tool_failures     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (machine_id, date, model, project)
+  );
+`;
+
+// Columns carried over verbatim by the machine_id rebuild, in insert order.
+// agent_events is absent on purpose: its PK is an AUTOINCREMENT rowid, so it
+// only needs ALTER TABLE ADD COLUMN.
+const REBUILD_COLUMNS: Record<string, string> = {
+  sessions: "id, status, project, cwd, entrypoint, provider, started_at, ended_at, updated_at, metadata",
+  agents: "id, session_id, parent_agent_id, type, subagent_type, description, status, current_tool, started_at, ended_at, metadata, created_at",
+  token_usage: "session_id, model, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, updated_at",
+  daily_usage: "date, model, project, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, session_count, tool_calls, tool_failures",
+};
+
+function hasColumn(d: Database.Database, table: string, column: string): boolean {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return cols.some(c => c.name === column);
+}
+
+/**
+ * Backfill `machine_id` onto every usage table of a pre-hub database.
+ *
+ * Existing rows become machine `'local'` — the same id the in-process watchers
+ * and `POST /api/monitor/events` still write, so a single-machine install sees
+ * no behaviour change. Tables whose PRIMARY KEY has to widen are rebuilt (old
+ * table renamed aside, canonical DDL re-run, rows copied, old table dropped);
+ * agent_events only swaps its global unique index on source_id for a
+ * machine-scoped one.
+ */
+function migrateMachineColumns(d: Database.Database): void {
+  const rebuilds = Object.keys(REBUILD_COLUMNS).filter(t => !hasColumn(d, t, "machine_id"));
+  const eventsNeedsColumn = !hasColumn(d, "agent_events", "machine_id");
+  if (rebuilds.length === 0 && !eventsNeedsColumn) return;
+
+  const ddl: Record<string, string> = {
+    sessions: CREATE_SESSIONS,
+    agents: CREATE_AGENTS,
+    token_usage: CREATE_TOKEN_USAGE,
+    daily_usage: CREATE_DAILY_USAGE,
+  };
+
+  // Both pragmas are no-ops inside a transaction, so they toggle out here.
+  // foreign_keys=OFF is the documented prelude to a table rebuild; legacy
+  // alter-table keeps `ALTER TABLE ... RENAME` from rewriting the REFERENCES
+  // clause we deliberately point at the about-to-be-recreated `agents`.
+  d.pragma("foreign_keys = OFF");
+  d.pragma("legacy_alter_table = ON");
+  try {
+    d.transaction(() => {
+      for (const table of rebuilds) {
+        const cols = REBUILD_COLUMNS[table];
+        d.exec(`ALTER TABLE ${table} RENAME TO ${table}__pre_machine`);
+        d.exec(ddl[table]);
+        d.exec(`INSERT INTO ${table} (machine_id, ${cols}) SELECT 'local', ${cols} FROM ${table}__pre_machine`);
+        d.exec(`DROP TABLE ${table}__pre_machine`);
+      }
+      if (eventsNeedsColumn) {
+        d.exec("ALTER TABLE agent_events ADD COLUMN machine_id TEXT NOT NULL DEFAULT 'local'");
+      }
+    })();
+  } finally {
+    d.pragma("legacy_alter_table = OFF");
+    d.pragma("foreign_keys = ON");
+  }
+}
+
 export function getDb(): Database.Database {
   if (db) return db;
 
@@ -43,40 +191,13 @@ export function getDb(): Database.Database {
   stmtCache = new Map();
 
   // Create tables
+  db.exec(CREATE_SESSIONS + CREATE_AGENTS + CREATE_TOKEN_USAGE + CREATE_DAILY_USAGE);
   db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id              TEXT PRIMARY KEY,
-      status          TEXT NOT NULL DEFAULT 'active',
-      project         TEXT NOT NULL DEFAULT '',
-      cwd             TEXT NOT NULL DEFAULT '',
-      entrypoint      TEXT NOT NULL DEFAULT '',
-      provider        TEXT NOT NULL DEFAULT 'anthropic',
-      started_at      INTEGER NOT NULL,
-      ended_at        INTEGER,
-      updated_at      INTEGER NOT NULL,
-      metadata        TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS agents (
-      id              TEXT PRIMARY KEY,
-      session_id      TEXT NOT NULL,
-      parent_agent_id TEXT,
-      type            TEXT NOT NULL DEFAULT 'main',
-      subagent_type   TEXT,
-      description     TEXT NOT NULL DEFAULT '',
-      status          TEXT NOT NULL DEFAULT 'idle',
-      current_tool    TEXT,
-      started_at      INTEGER NOT NULL,
-      ended_at        INTEGER,
-      metadata        TEXT,
-      created_at      INTEGER NOT NULL,
-      FOREIGN KEY (parent_agent_id) REFERENCES agents(id) ON DELETE SET NULL
-    );
-
     CREATE TABLE IF NOT EXISTS agent_events (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id        TEXT NOT NULL,
       session_id      TEXT NOT NULL DEFAULT '',
+      machine_id      TEXT NOT NULL DEFAULT 'local',
       provider        TEXT NOT NULL DEFAULT 'anthropic',
       source_id       TEXT,
       event_type      TEXT NOT NULL,
@@ -88,51 +209,9 @@ export function getDb(): Database.Database {
       created_at      INTEGER NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS token_usage (
-      session_id      TEXT NOT NULL,
-      model           TEXT NOT NULL,
-      provider        TEXT NOT NULL DEFAULT 'anthropic',
-      input_tokens    INTEGER NOT NULL DEFAULT 0,
-      output_tokens   INTEGER NOT NULL DEFAULT 0,
-      cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
-      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-      cost            REAL NOT NULL DEFAULT 0,
-      updated_at      INTEGER NOT NULL,
-      PRIMARY KEY (session_id, model)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_events_agent_id ON agent_events(agent_id);
-    CREATE INDEX IF NOT EXISTS idx_events_session_id ON agent_events(session_id);
-    CREATE INDEX IF NOT EXISTS idx_events_timestamp ON agent_events(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_events_type ON agent_events(event_type);
-    CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
-    CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
-    CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
-    CREATE INDEX IF NOT EXISTS idx_agents_session_type_status ON agents(session_id, type, status);
-    CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_events_agent_ts ON agent_events(agent_id, timestamp);
-    CREATE INDEX IF NOT EXISTS idx_events_session_ts ON agent_events(session_id, timestamp);
-    CREATE INDEX IF NOT EXISTS idx_agents_parent ON agents(parent_agent_id);
-
-    CREATE TABLE IF NOT EXISTS daily_usage (
-      date              TEXT NOT NULL,
-      model             TEXT NOT NULL,
-      project           TEXT NOT NULL DEFAULT '',
-      input_tokens      INTEGER NOT NULL DEFAULT 0,
-      output_tokens     INTEGER NOT NULL DEFAULT 0,
-      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-      cost              REAL NOT NULL DEFAULT 0,
-      session_count     INTEGER NOT NULL DEFAULT 0,
-      tool_calls        INTEGER NOT NULL DEFAULT 0,
-      tool_failures     INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (date, model, project)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_daily_usage_date ON daily_usage(date);
-    CREATE INDEX IF NOT EXISTS idx_daily_usage_project ON daily_usage(project);
-
-    -- Per-file tail cursor for the Codex rollout watcher (backfill + live poll)
+    -- Per-file tail cursor for the Codex rollout watcher (backfill + live poll).
+    -- Local-only: the watchers run on the edge, never on the hub, so this table
+    -- stays machine-agnostic.
     CREATE TABLE IF NOT EXISTS codex_ingest (
       file_path     TEXT PRIMARY KEY,
       byte_offset   INTEGER NOT NULL DEFAULT 0,
@@ -168,13 +247,45 @@ export function getDb(): Database.Database {
   const tokenColNames = new Set(tokenCols.map(c => c.name));
   if (!tokenColNames.has("provider")) db.exec("ALTER TABLE token_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic'");
 
-  // Provider/source_id indexes run after the ALTER TABLEs above so the
-  // columns they reference are guaranteed to exist on pre-existing DBs too
-  // (a fresh DB already has them from the CREATE TABLE block above).
+  // Runs after the provider/source_id ALTERs above so the rebuild copies a
+  // column set that's guaranteed to exist, and before the index block below so
+  // the indexes land on the rebuilt tables rather than being dropped with the
+  // old ones.
+  migrateMachineColumns(db);
+
+  // Indexes run last: every column they reference is guaranteed to exist by
+  // now, on fresh and migrated databases alike.
   db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_source_id ON agent_events(source_id) WHERE source_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_events_agent_id ON agent_events(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_events_session_id ON agent_events(session_id);
+    CREATE INDEX IF NOT EXISTS idx_events_timestamp ON agent_events(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_events_type ON agent_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
+    CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
+    CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+    CREATE INDEX IF NOT EXISTS idx_agents_session_type_status ON agents(session_id, type, status);
+    CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_events_agent_ts ON agent_events(agent_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_events_session_ts ON agent_events(session_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_agents_parent ON agents(parent_agent_id);
+    CREATE INDEX IF NOT EXISTS idx_daily_usage_date ON daily_usage(date);
+    CREATE INDEX IF NOT EXISTS idx_daily_usage_project ON daily_usage(project);
     CREATE INDEX IF NOT EXISTS idx_events_provider ON agent_events(provider);
     CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider);
+
+    -- Machine scoping: the "which machines do we know about" query and the
+    -- per-machine filters the UI will hang off /api/machines.
+    CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_agents_machine_session ON agents(machine_id, session_id);
+    CREATE INDEX IF NOT EXISTS idx_events_machine_ts ON agent_events(machine_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_events_machine_session ON agent_events(machine_id, session_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_machine ON token_usage(machine_id);
+    CREATE INDEX IF NOT EXISTS idx_daily_usage_machine ON daily_usage(machine_id);
+
+    -- source_id is only an idempotency key *within* a machine — two edges can
+    -- mint the same key — so the old global unique index is replaced here.
+    DROP INDEX IF EXISTS idx_events_source_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_machine_source_id ON agent_events(machine_id, source_id) WHERE source_id IS NOT NULL;
   `);
 
   return db;
@@ -182,20 +293,33 @@ export function getDb(): Database.Database {
 
 // --- Session CRUD ---
 
-export function createSession(session: Omit<SessionRecord, "updated_at" | "provider">, provider: DbProvider = "anthropic"): SessionRecord {
+export function createSession(
+  session: Omit<SessionRecord, "updated_at" | "provider" | "machine_id" | "machine_label">,
+  provider: DbProvider = "anthropic",
+  machine: MachineCtx = LOCAL_MACHINE
+): SessionRecord {
   const now = Date.now();
+  const label = machine.label ?? null;
   prep(`
-    INSERT OR IGNORE INTO sessions (id, status, project, cwd, entrypoint, provider, started_at, ended_at, updated_at, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(session.id, session.status, session.project, session.cwd, session.entrypoint, provider, session.started_at, session.ended_at, now, session.metadata);
-  return { ...session, provider, updated_at: now };
+    INSERT OR IGNORE INTO sessions (id, machine_id, machine_label, status, project, cwd, entrypoint, provider, started_at, ended_at, updated_at, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(session.id, machine.id, label, session.status, session.project, session.cwd, session.entrypoint, provider, session.started_at, session.ended_at, now, session.metadata);
+  return { ...session, machine_id: machine.id, machine_label: label, provider, updated_at: now };
 }
 
-export function getSession(id: string): SessionRecord | null {
-  return prep("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRecord | null;
+// machineId omitted means "whichever machine owns this id" — the read-only UI
+// routes are still machine-agnostic. Every lifecycle caller passes one.
+export function getSession(id: string, machineId?: string): SessionRecord | null {
+  return machineId === undefined
+    ? prep("SELECT * FROM sessions WHERE id = ? ORDER BY updated_at DESC LIMIT 1").get(id) as SessionRecord | null
+    : prep("SELECT * FROM sessions WHERE machine_id = ? AND id = ?").get(machineId, id) as SessionRecord | null;
 }
 
-export function updateSession(id: string, updates: Partial<Pick<SessionRecord, "status" | "ended_at" | "metadata">>): SessionRecord | null {
+export function updateSession(
+  id: string,
+  updates: Partial<Pick<SessionRecord, "status" | "ended_at" | "metadata">>,
+  machineId?: string
+): SessionRecord | null {
   const d = getDb();
   const fields: string[] = ["updated_at = ?"];
   const values: unknown[] = [Date.now()];
@@ -204,21 +328,37 @@ export function updateSession(id: string, updates: Partial<Pick<SessionRecord, "
   if (updates.ended_at !== undefined) { fields.push("ended_at = ?"); values.push(updates.ended_at); }
   if (updates.metadata !== undefined) { fields.push("metadata = ?"); values.push(updates.metadata); }
 
+  const scope = machineId === undefined ? "" : " AND machine_id = ?";
   values.push(id);
-  d.prepare(`UPDATE sessions SET ${fields.join(", ")} WHERE id = ?`).run(...values);
-  return getSession(id);
+  if (machineId !== undefined) values.push(machineId);
+  d.prepare(`UPDATE sessions SET ${fields.join(", ")} WHERE id = ?${scope}`).run(...values);
+  return getSession(id, machineId);
 }
 
-export function ensureSession(sessionId: string, project?: string, cwd?: string, entrypoint?: string): SessionRecord {
-  const existing = getSession(sessionId);
+export function ensureSession(
+  sessionId: string,
+  project?: string,
+  cwd?: string,
+  entrypoint?: string,
+  machine: MachineCtx = LOCAL_MACHINE,
+  provider: DbProvider = "anthropic"
+): SessionRecord {
+  const existing = getSession(sessionId, machine.id);
   if (existing) {
-    // Reactivate if needed
+    // A machine can rename itself between batches; the touch below is already
+    // a write, so carrying the newest label costs nothing extra.
+    const label = machine.label ?? existing.machine_label ?? null;
     if (existing.status !== "active") {
-      return updateSession(sessionId, { status: "active" }) || existing;
+      const reactivated = updateSession(sessionId, { status: "active" }, machine.id) || existing;
+      if (label !== existing.machine_label) {
+        prep("UPDATE sessions SET machine_label = ? WHERE machine_id = ? AND id = ?").run(label, machine.id, sessionId);
+        return { ...reactivated, machine_label: label };
+      }
+      return reactivated;
     }
-    // Touch updated_at
-    prep("UPDATE sessions SET updated_at = ? WHERE id = ?").run(Date.now(), sessionId);
-    return { ...existing, updated_at: Date.now() };
+    const now = Date.now();
+    prep("UPDATE sessions SET updated_at = ?, machine_label = ? WHERE machine_id = ? AND id = ?").run(now, label, machine.id, sessionId);
+    return { ...existing, machine_label: label, updated_at: now };
   }
 
   return createSession({
@@ -230,26 +370,33 @@ export function ensureSession(sessionId: string, project?: string, cwd?: string,
     started_at: Date.now(),
     ended_at: null,
     metadata: null,
-  });
+  }, provider, machine);
 }
 
 // --- Agent CRUD ---
 
-export function createAgent(agent: Omit<AgentRecord, "created_at">): AgentRecord {
+export function createAgent(
+  agent: Omit<AgentRecord, "created_at" | "machine_id">,
+  machineId: string = LOCAL_MACHINE_ID
+): AgentRecord {
   const now = Date.now();
   prep(`
-    INSERT OR IGNORE INTO agents (id, session_id, parent_agent_id, type, subagent_type, description, status, current_tool, started_at, ended_at, metadata, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO agents (id, machine_id, session_id, parent_agent_id, type, subagent_type, description, status, current_tool, started_at, ended_at, metadata, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    agent.id, agent.session_id, agent.parent_agent_id, agent.type, agent.subagent_type,
+    agent.id, machineId, agent.session_id, agent.parent_agent_id, agent.type, agent.subagent_type,
     agent.description, agent.status, agent.current_tool, agent.started_at, agent.ended_at, agent.metadata, now
   );
   // Re-read so the returned row (which gets broadcast over SSE) carries the
   // session's provider like every other agent read.
-  return getAgent(agent.id) ?? { ...agent, created_at: now };
+  return getAgent(agent.id, machineId) ?? { ...agent, machine_id: machineId, created_at: now };
 }
 
-export function updateAgent(id: string, updates: Partial<Pick<AgentRecord, "status" | "ended_at" | "description" | "metadata" | "current_tool" | "subagent_type">>): AgentRecord | null {
+export function updateAgent(
+  id: string,
+  updates: Partial<Pick<AgentRecord, "status" | "ended_at" | "description" | "metadata" | "current_tool" | "subagent_type">>,
+  machineId?: string
+): AgentRecord | null {
   const d = getDb();
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -261,23 +408,28 @@ export function updateAgent(id: string, updates: Partial<Pick<AgentRecord, "stat
   if (updates.current_tool !== undefined) { fields.push("current_tool = ?"); values.push(updates.current_tool); }
   if (updates.subagent_type !== undefined) { fields.push("subagent_type = ?"); values.push(updates.subagent_type); }
 
-  if (fields.length === 0) return getAgent(id);
+  if (fields.length === 0) return getAgent(id, machineId);
 
+  const scope = machineId === undefined ? "" : " AND machine_id = ?";
   values.push(id);
-  d.prepare(`UPDATE agents SET ${fields.join(", ")} WHERE id = ?`).run(...values);
-  return getAgent(id);
+  if (machineId !== undefined) values.push(machineId);
+  d.prepare(`UPDATE agents SET ${fields.join(", ")} WHERE id = ?${scope}`).run(...values);
+  return getAgent(id, machineId);
 }
 
-export function getAgent(id: string): AgentRecord | null {
+export function getAgent(id: string, machineId?: string): AgentRecord | null {
   // Carry the session's provider on every single-agent read: these rows are
   // broadcast over SSE, and the monitor's provider tabs drop agents whose
-  // provider is missing.
+  // provider is missing. The session join is machine-scoped — two machines can
+  // report the same session id.
   return prep(`
     SELECT a.*, COALESCE(s.provider, 'anthropic') AS provider
     FROM agents a
-    LEFT JOIN sessions s ON s.id = a.session_id
-    WHERE a.id = ?
-  `).get(id) as AgentRecord | null;
+    LEFT JOIN sessions s ON s.id = a.session_id AND s.machine_id = a.machine_id
+    WHERE a.id = ?${machineId === undefined ? "" : " AND a.machine_id = ?"}
+    ORDER BY a.started_at DESC
+    LIMIT 1
+  `).get(...(machineId === undefined ? [id] : [id, machineId])) as AgentRecord | null;
 }
 
 export function listAgents(filters?: {
@@ -285,12 +437,14 @@ export function listAgents(filters?: {
   status?: string;
   type?: string;
   provider?: DbProvider;
+  machine_id?: string;
   limit?: number;
   offset?: number;
 }): AgentRecord[] {
   const clauses: string[] = [];
   const values: unknown[] = [];
 
+  if (filters?.machine_id) { clauses.push("a.machine_id = ?"); values.push(filters.machine_id); }
   if (filters?.session_id) { clauses.push("a.session_id = ?"); values.push(filters.session_id); }
   if (filters?.status) { clauses.push("a.status = ?"); values.push(filters.status); }
   if (filters?.type) { clauses.push("a.type = ?"); values.push(filters.type); }
@@ -306,37 +460,46 @@ export function listAgents(filters?: {
   return getDb().prepare(`
     SELECT a.*, COALESCE(s.provider, 'anthropic') AS provider
     FROM agents a
-    LEFT JOIN sessions s ON s.id = a.session_id
+    LEFT JOIN sessions s ON s.id = a.session_id AND s.machine_id = a.machine_id
     ${where}
     ORDER BY a.started_at DESC
     LIMIT ? OFFSET ?
   `).all(...values, limit, offset) as AgentRecord[];
 }
 
-export function getAgentChildren(parentId: string): AgentRecord[] {
-  return prep(
-    "SELECT * FROM agents WHERE parent_agent_id = ? ORDER BY started_at ASC"
-  ).all(parentId) as AgentRecord[];
+export function getAgentChildren(parentId: string, machineId?: string): AgentRecord[] {
+  return machineId === undefined
+    ? prep("SELECT * FROM agents WHERE parent_agent_id = ? ORDER BY started_at ASC").all(parentId) as AgentRecord[]
+    : prep("SELECT * FROM agents WHERE machine_id = ? AND parent_agent_id = ? ORDER BY started_at ASC").all(machineId, parentId) as AgentRecord[];
 }
 
-// Find main agent for a session
-export function getMainAgent(sessionId: string): AgentRecord | null {
+// Find main agent for a session. Machine-scoped by default: session ids are
+// only unique per machine, so an unscoped lookup could hand a remote batch the
+// local machine's main agent.
+export function getMainAgent(sessionId: string, machineId: string = LOCAL_MACHINE_ID): AgentRecord | null {
   return prep(
-    "SELECT * FROM agents WHERE session_id = ? AND type = 'main' LIMIT 1"
-  ).get(sessionId) as AgentRecord | null;
+    "SELECT * FROM agents WHERE machine_id = ? AND session_id = ? AND type = 'main' LIMIT 1"
+  ).get(machineId, sessionId) as AgentRecord | null;
 }
 
 // Find working subagents for matching on SubagentStop
-export function getWorkingSubagents(sessionId: string): AgentRecord[] {
+export function getWorkingSubagents(sessionId: string, machineId: string = LOCAL_MACHINE_ID): AgentRecord[] {
   return prep(
-    "SELECT * FROM agents WHERE session_id = ? AND type = 'subagent' AND status = 'working' ORDER BY started_at ASC"
-  ).all(sessionId) as AgentRecord[];
+    "SELECT * FROM agents WHERE machine_id = ? AND session_id = ? AND type = 'subagent' AND status = 'working' ORDER BY started_at ASC"
+  ).all(machineId, sessionId) as AgentRecord[];
 }
 
 // --- Auto-register agent if not exists ---
 
-export function ensureAgent(agentId: string, sessionId?: string, project?: string, entrypoint?: string): AgentRecord {
-  const existing = getAgent(agentId);
+export function ensureAgent(
+  agentId: string,
+  sessionId?: string,
+  project?: string,
+  entrypoint?: string,
+  machine: MachineCtx = LOCAL_MACHINE,
+  provider: DbProvider = "anthropic"
+): AgentRecord {
+  const existing = getAgent(agentId, machine.id);
   if (existing) return existing;
 
   const projectName = project || "unknown-project";
@@ -345,7 +508,7 @@ export function ensureAgent(agentId: string, sessionId?: string, project?: strin
 
   // Also ensure session exists
   if (sessionId) {
-    ensureSession(sessionId, projectName, undefined, entrypoint);
+    ensureSession(sessionId, projectName, undefined, entrypoint, machine, provider);
   }
 
   return createAgent({
@@ -360,36 +523,58 @@ export function ensureAgent(agentId: string, sessionId?: string, project?: strin
     started_at: Date.now(),
     ended_at: null,
     metadata: project ? JSON.stringify({ project, entrypoint }) : null,
-  });
+  }, machine.id);
 }
 
 // --- Event CRUD ---
 
 export function createEvent(
-  event: Omit<AgentEvent, "id" | "created_at" | "provider" | "source_id">,
+  event: Omit<AgentEvent, "id" | "created_at" | "provider" | "source_id" | "machine_id">,
   provider: DbProvider = "anthropic",
-  sourceId: string | null = null
-): AgentEvent {
+  sourceId: string | null = null,
+  machineId: string = LOCAL_MACHINE_ID
+): AgentEvent & { inserted: boolean } {
   const now = Date.now();
-  // Codex re-ingest passes the same sourceId for an already-seen record, so
-  // OR IGNORE lets the partial unique index on source_id silently dedup it.
-  // Claude events never pass sourceId, so their insert path is unchanged.
+  // Codex re-ingest and hub retries pass the same sourceId for an already-seen
+  // record, so OR IGNORE lets the partial unique index on (machine_id,
+  // source_id) silently dedup it. Claude events never pass sourceId, so their
+  // insert path is unchanged.
   const insertVerb = sourceId !== null ? "INSERT OR IGNORE" : "INSERT";
   // insertVerb has exactly two possible values, so prep()'s cache holds two
   // compiled statements for this call site — never re-parses on every event.
   const result = prep(`
-    ${insertVerb} INTO agent_events (agent_id, session_id, provider, source_id, event_type, tool_name, summary, content, files_affected, timestamp, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ${insertVerb} INTO agent_events (agent_id, session_id, machine_id, provider, source_id, event_type, tool_name, summary, content, files_affected, timestamp, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    event.agent_id, event.session_id, provider, sourceId, event.event_type,
+    event.agent_id, event.session_id, machineId, provider, sourceId, event.event_type,
     event.tool_name, event.summary, event.content, event.files_affected,
     event.timestamp, now
   );
-  return { ...event, id: Number(result.lastInsertRowid), provider, source_id: sourceId, created_at: now };
+  // `inserted` is the honest answer to "did this write" — an OR IGNORE that
+  // dedups reports 0 changes but still returns the previous lastInsertRowid.
+  return {
+    ...event,
+    id: Number(result.lastInsertRowid),
+    machine_id: machineId,
+    provider,
+    source_id: sourceId,
+    created_at: now,
+    inserted: result.changes > 0,
+  };
+}
+
+// Has this machine already delivered this idempotency key? The hub checks
+// before replaying an event so a retried batch doesn't re-run lifecycle side
+// effects (spawning a second subagent row, re-completing a session).
+export function hasEventSource(machineId: string, sourceId: string): boolean {
+  return prep(
+    "SELECT 1 AS x FROM agent_events WHERE machine_id = ? AND source_id = ? LIMIT 1"
+  ).get(machineId, sourceId) !== undefined;
 }
 
 export function listEvents(agentId: string, filters?: {
   event_type?: string;
+  machine_id?: string;
   limit?: number;
   offset?: number;
   order?: "asc" | "desc";
@@ -397,6 +582,7 @@ export function listEvents(agentId: string, filters?: {
   const clauses: string[] = ["agent_id = ?"];
   const values: unknown[] = [agentId];
 
+  if (filters?.machine_id) { clauses.push("machine_id = ?"); values.push(filters.machine_id); }
   if (filters?.event_type) { clauses.push("event_type = ?"); values.push(filters.event_type); }
 
   const limit = filters?.limit ?? 500;
@@ -449,11 +635,15 @@ export function getLatestEvent(agentId: string): AgentEvent | null {
 
 // --- Token Usage ---
 
-export function upsertTokenUsage(usage: Omit<TokenUsage, "provider">, provider: DbProvider = "anthropic"): void {
+export function upsertTokenUsage(
+  usage: Omit<TokenUsage, "provider" | "machine_id">,
+  provider: DbProvider = "anthropic",
+  machineId: string = LOCAL_MACHINE_ID
+): void {
   prep(`
-    INSERT INTO token_usage (session_id, model, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(session_id, model) DO UPDATE SET
+    INSERT INTO token_usage (machine_id, session_id, model, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(machine_id, session_id, model) DO UPDATE SET
       provider = excluded.provider,
       input_tokens = excluded.input_tokens,
       output_tokens = excluded.output_tokens,
@@ -461,11 +651,13 @@ export function upsertTokenUsage(usage: Omit<TokenUsage, "provider">, provider: 
       cache_write_tokens = excluded.cache_write_tokens,
       cost = excluded.cost,
       updated_at = excluded.updated_at
-  `).run(usage.session_id, usage.model, provider, usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens, usage.cost, usage.updated_at);
+  `).run(machineId, usage.session_id, usage.model, provider, usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens, usage.cost, usage.updated_at);
 }
 
-export function getSessionTokenUsage(sessionId: string): TokenUsage[] {
-  return prep("SELECT * FROM token_usage WHERE session_id = ?").all(sessionId) as TokenUsage[];
+export function getSessionTokenUsage(sessionId: string, machineId?: string): TokenUsage[] {
+  return machineId === undefined
+    ? prep("SELECT * FROM token_usage WHERE session_id = ?").all(sessionId) as TokenUsage[]
+    : prep("SELECT * FROM token_usage WHERE machine_id = ? AND session_id = ?").all(machineId, sessionId) as TokenUsage[];
 }
 
 export function getTotalCost(): number {
@@ -494,10 +686,21 @@ export function upsertCodexIngest(row: CodexIngestRow): void {
 
 // --- Sessions with aggregated data ---
 
-export function listSessions(limit = 50, provider?: DbProvider): AgentSession[] {
+export function listSessions(limit = 50, provider?: DbProvider, machineId?: string): AgentSession[] {
+  const clauses: string[] = [];
+  const values: unknown[] = [];
+  if (provider) { clauses.push("s.provider = ?"); values.push(provider); }
+  if (machineId) { clauses.push("s.machine_id = ?"); values.push(machineId); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  // Every correlated read below matches machine_id as well as the id: session
+  // ids only need to be unique per machine, so an id-only match would fold two
+  // machines' rows into one row of counts.
   return getDb().prepare(`
     SELECT
       s.id as session_id,
+      s.machine_id,
+      s.machine_label,
       s.status,
       s.project,
       s.entrypoint,
@@ -505,23 +708,48 @@ export function listSessions(limit = 50, provider?: DbProvider): AgentSession[] 
       COUNT(DISTINCT a.id) as agent_count,
       COALESCE(SUM(CASE WHEN a.status = 'working' THEN 1 ELSE 0 END), 0) as working_count,
       COALESCE(SUM(CASE WHEN a.type = 'subagent' THEN 1 ELSE 0 END), 0) as subagent_count,
-      (SELECT COUNT(*) FROM agent_events WHERE session_id = s.id) as event_count,
-      COALESCE((SELECT SUM(cost) FROM token_usage WHERE session_id = s.id), 0) as total_cost,
+      (SELECT COUNT(*) FROM agent_events e WHERE e.session_id = s.id AND e.machine_id = s.machine_id) as event_count,
+      COALESCE((SELECT SUM(cost) FROM token_usage t WHERE t.session_id = s.id AND t.machine_id = s.machine_id), 0) as total_cost,
       s.started_at as first_started,
       s.updated_at as last_activity
     FROM sessions s
-    LEFT JOIN agents a ON a.session_id = s.id
-    ${provider ? "WHERE s.provider = ?" : ""}
-    GROUP BY s.id
+    LEFT JOIN agents a ON a.session_id = s.id AND a.machine_id = s.machine_id
+    ${where}
+    GROUP BY s.machine_id, s.id
     ORDER BY s.updated_at DESC
     LIMIT ?
-  `).all(...pArg(provider), limit) as AgentSession[];
+  `).all(...values, limit) as AgentSession[];
 }
 
-export function getSessionAgents(sessionId: string): AgentRecord[] {
-  return prep(
-    "SELECT * FROM agents WHERE session_id = ? ORDER BY started_at ASC"
-  ).all(sessionId) as AgentRecord[];
+export function getSessionAgents(sessionId: string, machineId?: string): AgentRecord[] {
+  return machineId === undefined
+    ? prep("SELECT * FROM agents WHERE session_id = ? ORDER BY started_at ASC").all(sessionId) as AgentRecord[]
+    : prep("SELECT * FROM agents WHERE machine_id = ? AND session_id = ? ORDER BY started_at ASC").all(machineId, sessionId) as AgentRecord[];
+}
+
+// --- Machines ---
+
+// Distinct machines the hub has heard from, newest activity first. Derived
+// rather than kept in its own table: sessions/agent_events already carry every
+// machine that ever wrote, so there's no second source of truth to keep in sync.
+export function listMachines(): import("@/types").MachineSummary[] {
+  return getDb().prepare(`
+    SELECT
+      m.machine_id AS id,
+      (
+        SELECT s.machine_label FROM sessions s
+        WHERE s.machine_id = m.machine_id AND s.machine_label IS NOT NULL
+        ORDER BY s.updated_at DESC LIMIT 1
+      ) AS label,
+      MAX(m.last_seen_at) AS last_seen_at
+    FROM (
+      SELECT machine_id, MAX(updated_at) AS last_seen_at FROM sessions GROUP BY machine_id
+      UNION ALL
+      SELECT machine_id, MAX(timestamp) AS last_seen_at FROM agent_events GROUP BY machine_id
+    ) m
+    GROUP BY m.machine_id
+    ORDER BY last_seen_at DESC
+  `).all() as import("@/types").MachineSummary[];
 }
 
 // --- Stats ---
@@ -539,7 +767,7 @@ export function getMonitorStats(provider?: DbProvider): MonitorStats {
   const agents = d.prepare(`
     SELECT COUNT(*) as total, SUM(CASE WHEN a.status = 'working' THEN 1 ELSE 0 END) as working
     FROM agents a
-    LEFT JOIN sessions s ON s.id = a.session_id
+    LEFT JOIN sessions s ON s.id = a.session_id AND s.machine_id = a.machine_id
     WHERE 1=1${pSql("s.provider", provider)}
   `).get(...pa) as { total: number; working: number };
 
@@ -581,19 +809,27 @@ export function setSetting(key: string, value: string): void {
 
 // --- Cleanup ---
 
-export function completeSessionAgents(sessionId: string): void {
+export function completeSessionAgents(sessionId: string, machineId: string = LOCAL_MACHINE_ID): void {
   const now = Date.now();
-  prep("UPDATE agents SET status = 'completed', ended_at = ? WHERE session_id = ? AND status IN ('working', 'idle')").run(now, sessionId);
+  prep("UPDATE agents SET status = 'completed', ended_at = ? WHERE machine_id = ? AND session_id = ? AND status IN ('working', 'idle')").run(now, machineId, sessionId);
 }
 
 // Delete every raw row tied to a session started before an absolute epoch-ms
 // cutoff. Runs in one transaction. Leaves daily_usage intact.
+// Rows belong to a session only when the machine matches too, so the old
+// `session_id IN (SELECT id FROM sessions ...)` becomes a machine-aware EXISTS.
+const OLD_SESSION_EXISTS = (table: string) =>
+  `EXISTS (SELECT 1 FROM sessions s WHERE s.id = ${table}.session_id AND s.machine_id = ${table}.machine_id AND s.started_at < ?)`;
+
 export function deleteBefore(cutoffMs: number): import("@/types").PurgeCounts {
   const d = getDb();
   const run = d.transaction((): import("@/types").PurgeCounts => {
-    const events = prep("DELETE FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
-    const agents = prep("DELETE FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
-    const token_usage = prep("DELETE FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)").run(cutoffMs).changes;
+    const events = prep(`DELETE FROM agent_events WHERE ${OLD_SESSION_EXISTS("agent_events")}`).run(cutoffMs).changes;
+    // Counted before the delete: the parent/child FK cascades, and rows removed
+    // by a cascade don't show up in .changes.
+    const agents = (prep(`SELECT COUNT(*) n FROM agents WHERE ${OLD_SESSION_EXISTS("agents")}`).get(cutoffMs) as { n: number }).n;
+    prep(`DELETE FROM agents WHERE ${OLD_SESSION_EXISTS("agents")}`).run(cutoffMs);
+    const token_usage = prep(`DELETE FROM token_usage WHERE ${OLD_SESSION_EXISTS("token_usage")}`).run(cutoffMs).changes;
     const sessions = prep("DELETE FROM sessions WHERE started_at < ?").run(cutoffMs).changes;
     return { sessions, agents, events, token_usage };
   });
@@ -610,16 +846,19 @@ export function previewPurge(cutoffMs: number): import("@/types").PurgeCounts {
   const one = (sql: string) => (prep(sql).get(cutoffMs) as { n: number }).n;
   return {
     sessions: one("SELECT COUNT(*) n FROM sessions WHERE started_at < ?"),
-    agents: one("SELECT COUNT(*) n FROM agents WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
-    events: one("SELECT COUNT(*) n FROM agent_events WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
-    token_usage: one("SELECT COUNT(*) n FROM token_usage WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)"),
+    agents: one(`SELECT COUNT(*) n FROM agents WHERE ${OLD_SESSION_EXISTS("agents")}`),
+    events: one(`SELECT COUNT(*) n FROM agent_events WHERE ${OLD_SESSION_EXISTS("agent_events")}`),
+    token_usage: one(`SELECT COUNT(*) n FROM token_usage WHERE ${OLD_SESSION_EXISTS("token_usage")}`),
   };
 }
 
 // Clear all monitor data
 export function clearAllMonitorData(): { sessions: number; agents: number; events: number; token_usage: number } {
   const events = prep("DELETE FROM agent_events").run().changes;
-  const agents = prep("DELETE FROM agents").run().changes;
+  // Counted first: the agents self-FK cascades, and cascaded deletes don't
+  // count towards .changes.
+  const agents = (prep("SELECT COUNT(*) n FROM agents").get() as { n: number }).n;
+  prep("DELETE FROM agents").run();
   const tokenUsage = prep("DELETE FROM token_usage").run().changes;
   const sessions = prep("DELETE FROM sessions").run().changes;
   return { sessions, agents, events, token_usage: tokenUsage };
@@ -737,7 +976,7 @@ export function abandonStaleSessions(): number {
   const result = prep("UPDATE sessions SET status = 'abandoned', ended_at = ? WHERE status = 'active' AND updated_at < ?").run(Date.now(), cutoff);
   // Also complete their agents
   if (result.changes > 0) {
-    prep("UPDATE agents SET status = 'completed', ended_at = ? WHERE status IN ('working', 'idle') AND session_id IN (SELECT id FROM sessions WHERE status = 'abandoned')").run(Date.now());
+    prep(`UPDATE agents SET status = 'completed', ended_at = ? WHERE status IN ('working', 'idle') AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = agents.session_id AND s.machine_id = agents.machine_id AND s.status = 'abandoned')`).run(Date.now());
   }
   return result.changes;
 }
@@ -768,8 +1007,11 @@ export function rollupDailyUsageRange(from: number, to: number): void {
   // Bound the scan: daily_usage older than the cap is already immutable history
   const minFrom = Math.max(from, to - 92 * 86400000);
 
+  // Rolled up per machine: daily_usage is keyed by machine_id, and summing two
+  // machines into one row would make the per-machine filter impossible later.
   const tokenRows = prep(`
     SELECT
+      s.machine_id,
       strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch', 'localtime') as date,
       t.model,
       COALESCE(s.project, '') as project,
@@ -780,10 +1022,11 @@ export function rollupDailyUsageRange(from: number, to: number): void {
       SUM(t.cost) as cost,
       COUNT(DISTINCT t.session_id) as session_count
     FROM token_usage t
-    JOIN sessions s ON s.id = t.session_id
+    JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
     WHERE s.started_at >= ? AND s.started_at < ?
-    GROUP BY date, t.model, s.project
+    GROUP BY s.machine_id, date, t.model, s.project
   `).all(minFrom, to) as {
+    machine_id: string;
     date: string; model: string; project: string;
     input_tokens: number; output_tokens: number;
     cache_read_tokens: number; cache_write_tokens: number;
@@ -794,23 +1037,24 @@ export function rollupDailyUsageRange(from: number, to: number): void {
 
   const toolStats = prep(`
     SELECT
+      ae.machine_id,
       strftime('%Y-%m-%d', ae.timestamp / 1000, 'unixepoch', 'localtime') as date,
       COALESCE(s.project, '') as project,
       COUNT(*) as tool_calls,
       SUM(CASE WHEN ae.event_type = 'tool_result' AND ae.content LIKE '%error%' THEN 1 ELSE 0 END) as tool_failures
     FROM agent_events ae
-    JOIN sessions s ON s.id = ae.session_id
+    JOIN sessions s ON s.id = ae.session_id AND s.machine_id = ae.machine_id
     WHERE ae.event_type IN ('tool_call', 'tool_result')
       AND ae.timestamp >= ? AND ae.timestamp < ?
-    GROUP BY date, s.project
-  `).all(minFrom, to) as { date: string; project: string; tool_calls: number; tool_failures: number }[];
+    GROUP BY ae.machine_id, date, s.project
+  `).all(minFrom, to) as { machine_id: string; date: string; project: string; tool_calls: number; tool_failures: number }[];
 
-  const toolMap = new Map(toolStats.map(r => [`${r.date}|${r.project}`, r]));
+  const toolMap = new Map(toolStats.map(r => [`${r.machine_id}|${r.date}|${r.project}`, r]));
 
   const upsert = prep(`
-    INSERT INTO daily_usage (date, model, project, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, session_count, tool_calls, tool_failures)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(date, model, project) DO UPDATE SET
+    INSERT INTO daily_usage (machine_id, date, model, project, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, session_count, tool_calls, tool_failures)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(machine_id, date, model, project) DO UPDATE SET
       input_tokens = excluded.input_tokens,
       output_tokens = excluded.output_tokens,
       cache_read_tokens = excluded.cache_read_tokens,
@@ -823,8 +1067,8 @@ export function rollupDailyUsageRange(from: number, to: number): void {
 
   const runAll = d.transaction(() => {
     for (const row of tokenRows) {
-      const tools = toolMap.get(`${row.date}|${row.project}`) || { tool_calls: 0, tool_failures: 0 };
-      upsert.run(row.date, row.model, row.project, row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens, row.cost, row.session_count, tools.tool_calls, tools.tool_failures);
+      const tools = toolMap.get(`${row.machine_id}|${row.date}|${row.project}`) || { tool_calls: 0, tool_failures: 0 };
+      upsert.run(row.machine_id, row.date, row.model, row.project, row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens, row.cost, row.session_count, tools.tool_calls, tools.tool_failures);
     }
   });
   runAll();
@@ -851,7 +1095,7 @@ function providerCostRows(from: number, to: number, provider: DbProvider) {
       SUM(t.cost) as cost,
       SUM(t.input_tokens + t.output_tokens) as tokens
     FROM token_usage t
-    JOIN sessions s ON s.id = t.session_id
+    JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
     WHERE s.started_at >= ? AND s.started_at < ? AND s.provider = ?
     GROUP BY date
   `).all(from, to, provider) as { date: string; cost: number; tokens: number }[];
@@ -873,7 +1117,7 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
       COALESCE(SUM(input_tokens), 0) as total_input_tokens,
       COALESCE(SUM(output_tokens), 0) as total_output_tokens
     FROM token_usage t
-    JOIN sessions s ON s.id = t.session_id
+    JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
     WHERE s.started_at >= ? AND s.started_at < ?${sP}
   `).get(from, to, ...pa) as { total_cost: number; total_input_tokens: number; total_output_tokens: number };
 
@@ -887,7 +1131,7 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
   const prev = d.prepare(`
     SELECT COALESCE(SUM(cost), 0) as total_cost
     FROM token_usage t
-    JOIN sessions s ON s.id = t.session_id
+    JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
     WHERE s.started_at >= ? AND s.started_at < ?${sP}
   `).get(prevFrom, prevTo, ...pa) as { total_cost: number };
 
@@ -909,7 +1153,7 @@ export function getAnalyticsOverview(from: number, to: number, provider?: DbProv
            SUM(cost) as model_cost,
            SUM(input_tokens + output_tokens) as model_tokens
     FROM token_usage t
-    JOIN sessions s ON s.id = t.session_id
+    JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
     WHERE s.started_at >= ? AND s.started_at < ?${sP}
     GROUP BY model ORDER BY model_cost DESC, model_tokens DESC LIMIT 1
   `).get(from, to, ...pa) as { model: string; model_cost: number; model_tokens: number } | undefined;
@@ -1043,6 +1287,7 @@ export function getSessionAnalytics(from: number, to: number, sort = "started_at
   return d.prepare(`
     SELECT
       s.id as session_id,
+      s.machine_id,
       s.project,
       s.entrypoint,
       s.status,
@@ -1054,13 +1299,13 @@ export function getSessionAnalytics(from: number, to: number, sort = "started_at
       s.started_at
     FROM sessions s
     LEFT JOIN (
-      SELECT session_id, SUM(input_tokens + output_tokens) AS total_tokens, SUM(cost) AS cost
-      FROM token_usage GROUP BY session_id
-    ) tu ON tu.session_id = s.id
+      SELECT machine_id, session_id, SUM(input_tokens + output_tokens) AS total_tokens, SUM(cost) AS cost
+      FROM token_usage GROUP BY machine_id, session_id
+    ) tu ON tu.session_id = s.id AND tu.machine_id = s.machine_id
     LEFT JOIN (
-      SELECT session_id, COUNT(*) AS tool_count
-      FROM agent_events WHERE event_type = 'tool_call' GROUP BY session_id
-    ) ec ON ec.session_id = s.id
+      SELECT machine_id, session_id, COUNT(*) AS tool_count
+      FROM agent_events WHERE event_type = 'tool_call' GROUP BY machine_id, session_id
+    ) ec ON ec.session_id = s.id AND ec.machine_id = s.machine_id
     WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.provider", provider)}
     ORDER BY ${sortCol} ${sortOrder}
     LIMIT ? OFFSET ?
@@ -1215,7 +1460,7 @@ export function getModelAnalytics(from: number, to: number, provider?: DbProvide
       SUM(t.cache_read_tokens) as cache_read_tokens,
       SUM(t.cache_write_tokens) as cache_write_tokens
     FROM token_usage t
-    JOIN sessions s ON s.id = t.session_id
+    JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
     WHERE s.started_at >= ? AND s.started_at < ?${pSql("s.provider", provider)}
     GROUP BY t.model
     ORDER BY cost DESC
@@ -1231,7 +1476,7 @@ export function getModelAnalytics(from: number, to: number, provider?: DbProvide
           SUM(t.cost) as cost,
           SUM(t.input_tokens + t.output_tokens) as tokens
         FROM token_usage t
-        JOIN sessions s ON s.id = t.session_id
+        JOIN sessions s ON s.id = t.session_id AND s.machine_id = t.machine_id
         WHERE s.started_at >= ? AND s.started_at < ? AND s.provider = ?
         GROUP BY date, t.model
         ORDER BY date ASC
@@ -1275,13 +1520,13 @@ export function getUsageInsights(from: number, to: number, provider?: DbProvider
   const projects = d.prepare(`
     SELECT
       s.project,
-      COUNT(DISTINCT s.id) as sessions,
+      COUNT(DISTINCT s.machine_id || '|' || s.id) as sessions,
       COUNT(ae.id) as events,
       SUM(CASE WHEN ae.event_type = 'tool_call' THEN 1 ELSE 0 END) as tool_calls,
       COUNT(DISTINCT strftime('%Y-%m-%d', ae.timestamp / 1000, 'unixepoch', 'localtime')) as active_days,
       MAX(s.updated_at) as last_active
     FROM sessions s
-    LEFT JOIN agent_events ae ON ae.session_id = s.id AND ae.timestamp >= ? AND ae.timestamp < ?${aeP}
+    LEFT JOIN agent_events ae ON ae.session_id = s.id AND ae.machine_id = s.machine_id AND ae.timestamp >= ? AND ae.timestamp < ?${aeP}
     WHERE s.started_at >= ? AND s.started_at < ?${sP}
     GROUP BY s.project
     ORDER BY events DESC
@@ -1313,7 +1558,7 @@ export function getUsageInsights(from: number, to: number, provider?: DbProvider
       COALESCE(MAX(
         COALESCE(
           s.ended_at,
-          (SELECT MAX(ae.timestamp) FROM agent_events ae WHERE ae.session_id = s.id),
+          (SELECT MAX(ae.timestamp) FROM agent_events ae WHERE ae.session_id = s.id AND ae.machine_id = s.machine_id),
           s.started_at
         ) - s.started_at
       ), 0) as longest_ms
