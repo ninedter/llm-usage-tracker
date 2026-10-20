@@ -1,7 +1,7 @@
 import { getCredentials } from "@/lib/credentials";
 import { ClaudeClient, type ClaudeSessionCreds } from "./claude-client";
 import { OpenAIClient } from "./openai-client";
-import { UpstreamAuthError } from "./errors";
+import { CLAUDE_OAUTH_EXPIRED_MESSAGE, UpstreamAuthError } from "./errors";
 import { claudeUsageCache, openaiUsageCache } from "./usage-cache";
 import type { ClaudeUsageData, OpenAIUsageData } from "@/types";
 
@@ -43,8 +43,14 @@ export async function getClaudeUsage(
 ): Promise<UsageResult<ClaudeUsageData>> {
   try {
     const session = savedClaudeSession();
-    if (!session && !(await ClaudeClient.readClaudeCodeOAuthToken())) {
-      return missing(CLAUDE_MISSING);
+    if (!session) {
+      const oauth = await ClaudeClient.readClaudeCodeOAuthState();
+      // Signed in once but the token lapsed: that's configured-but-expired, not
+      // "no credentials" — the card keeps its last data and shows the real error
+      if (oauth.expired) {
+        return { ok: false, code: "AUTH_EXPIRED", message: CLAUDE_OAUTH_EXPIRED_MESSAGE, status: 401 };
+      }
+      if (!oauth.token) return missing(CLAUDE_MISSING);
     }
     if (opts.fresh) claudeUsageCache.invalidate("claude");
     const data = await claudeUsageCache.get("claude", () =>

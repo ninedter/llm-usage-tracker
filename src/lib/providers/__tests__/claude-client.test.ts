@@ -142,6 +142,15 @@ describe("ClaudeClient.fetchUsage", () => {
     suspect.mockRestore();
   });
 
+  it("expired Keychain token and no session -> UpstreamAuthError naming the re-sign-in step", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN, expiresAt: Date.now() - 1000 }));
+
+    const err = await new ClaudeClient(null).fetchUsage().catch((e) => e);
+    expect(err).toBeInstanceOf(UpstreamAuthError);
+    expect(err.message).toMatch(/sign-in expired/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("OAuth failure without a session rethrows the OAuth error", async () => {
     execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
     fetchMock.mockResolvedValue(json({}, 401));
@@ -154,6 +163,60 @@ describe("ClaudeClient.readClaudeCodeOAuthToken", () => {
   it("expired expiresAt -> resolves null", async () => {
     execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN, expiresAt: Date.now() - 1000 }));
     await expect(ClaudeClient.readClaudeCodeOAuthToken()).resolves.toBeNull();
+  });
+
+  it("expired expiresAt -> state reports expired (not absent)", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN, expiresAt: Date.now() - 1000 }));
+    await expect(ClaudeClient.readClaudeCodeOAuthState()).resolves.toEqual({
+      token: null,
+      expired: true,
+    });
+  });
+
+  it("absent Keychain item -> state reports neither token nor expired", async () => {
+    execMock.mockRejectedValue(new Error("no keychain item"));
+    await expect(ClaudeClient.readClaudeCodeOAuthState()).resolves.toEqual({
+      token: null,
+      expired: false,
+    });
+  });
+
+  it("an expired result is cached only for the short retry window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      execMock.mockImplementation(() =>
+        keychain({ accessToken: OAUTH_TOKEN, expiresAt: Date.now() - 1000 })
+      );
+      await ClaudeClient.readClaudeCodeOAuthState();
+      vi.advanceTimersByTime(59_000);
+      await ClaudeClient.readClaudeCodeOAuthState();
+      expect(execMock).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(2_000);
+      await ClaudeClient.readClaudeCodeOAuthState();
+      expect(execMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a cached valid token is not served past its own expiresAt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const expiresAt = Date.now() + 30_000;
+      execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN, expiresAt }));
+      await expect(ClaudeClient.readClaudeCodeOAuthToken()).resolves.toBe(OAUTH_TOKEN);
+
+      vi.advanceTimersByTime(31_000);
+      // Re-probes instead of serving the cached (now expired) token for the full TTL
+      await expect(ClaudeClient.readClaudeCodeOAuthState()).resolves.toEqual({
+        token: null,
+        expired: true,
+      });
+      expect(execMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("future expiresAt -> resolves the token", async () => {

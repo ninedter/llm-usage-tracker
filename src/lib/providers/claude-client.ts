@@ -9,7 +9,7 @@ import {
   type ClaudeSpendLimitRaw,
   type ClaudeUsageResponse,
 } from "./claude-parse";
-import { UpstreamAuthError } from "./errors";
+import { CLAUDE_OAUTH_EXPIRED_MESSAGE, UpstreamAuthError } from "./errors";
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +30,12 @@ function makeHeaders(sessionKey: string): Record<string, string> {
 }
 
 const timeoutSignal = () => AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+
+/** Keychain probe result: `expired` means signed in once, but the token lapsed. */
+export interface ClaudeOAuthState {
+  token: string | null;
+  expired: boolean;
+}
 
 export interface ClaudeSessionCreds {
   sessionKey: string;
@@ -73,30 +79,45 @@ export class ClaudeClient {
   /**
    * Try to read Claude Code's OAuth token from the macOS Keychain.
    * Returns the access token or null if not found / expired.
-   *
-   * Memoized for 5 minutes: `security` hits the Keychain — doing that on every
-   * 60s usage poll (and every health check) is wasteful. A failed/absent token
-   * also caches (as null) so a machine without Claude Code isn't re-probed per
-   * request. Concurrent callers during a probe share one in-flight `execFile`.
    */
-  private static tokenCache: { value: string | null; at: number } | null = null;
-  private static tokenInFlight: Promise<string | null> | null = null;
+  static async readClaudeCodeOAuthToken(): Promise<string | null> {
+    return (await ClaudeClient.readClaudeCodeOAuthState()).token;
+  }
+
+  /**
+   * Keychain probe that tells "never signed in" apart from "sign-in expired",
+   * so an expired token surfaces as AUTH_EXPIRED instead of looking unconfigured.
+   *
+   * Memoized: `security` hits the Keychain — doing that on every 60s usage
+   * poll (and every health check) is wasteful. An absent token caches for the
+   * full TTL so a machine without Claude Code isn't re-probed per request; an
+   * expired one only for TOKEN_RETRY_TTL_MS so a fresh `claude` sign-in is
+   * picked up within a minute; a valid one never outlives its own expiresAt.
+   * Concurrent callers during a probe share one in-flight `execFile`.
+   */
+  private static tokenCache: { state: ClaudeOAuthState; until: number } | null = null;
+  private static tokenInFlight: Promise<ClaudeOAuthState> | null = null;
   private static readonly TOKEN_TTL_MS = 5 * 60 * 1000;
   private static readonly TOKEN_RETRY_TTL_MS = 60_000;
 
-  static async readClaudeCodeOAuthToken(): Promise<string | null> {
+  static async readClaudeCodeOAuthState(): Promise<ClaudeOAuthState> {
     const cached = ClaudeClient.tokenCache;
-    if (cached && Date.now() - cached.at < ClaudeClient.TOKEN_TTL_MS) return cached.value;
+    if (cached && Date.now() < cached.until) return cached.state;
     if (ClaudeClient.tokenInFlight) return ClaudeClient.tokenInFlight;
 
-    const probe: Promise<string | null> = ClaudeClient.readTokenUncached().then((value) => {
-      // invalidateTokenCache() during the probe detaches it: don't resurrect a stale value
-      if (ClaudeClient.tokenInFlight === probe) {
-        ClaudeClient.tokenCache = { value, at: Date.now() };
-        ClaudeClient.tokenInFlight = null;
+    const probe: Promise<ClaudeOAuthState> = ClaudeClient.readTokenUncached().then(
+      ({ expiresAt, ...state }) => {
+        // invalidateTokenCache() during the probe detaches it: don't resurrect a stale value
+        if (ClaudeClient.tokenInFlight === probe) {
+          const now = Date.now();
+          let until = now + (state.expired ? ClaudeClient.TOKEN_RETRY_TTL_MS : ClaudeClient.TOKEN_TTL_MS);
+          if (expiresAt != null) until = Math.min(until, expiresAt);
+          ClaudeClient.tokenCache = { state, until };
+          ClaudeClient.tokenInFlight = null;
+        }
+        return state;
       }
-      return value;
-    });
+    );
     ClaudeClient.tokenInFlight = probe;
     return probe;
   }
@@ -119,13 +140,14 @@ export class ClaudeClient {
   static markTokenSuspect(): void {
     const c = ClaudeClient.tokenCache;
     if (!c) return;
-    const retryAt = Date.now() - ClaudeClient.TOKEN_TTL_MS + ClaudeClient.TOKEN_RETRY_TTL_MS;
-    if (c.at > retryAt) ClaudeClient.tokenCache = { value: c.value, at: retryAt };
+    const retryUntil = Date.now() + ClaudeClient.TOKEN_RETRY_TTL_MS;
+    if (c.until > retryUntil) ClaudeClient.tokenCache = { state: c.state, until: retryUntil };
   }
 
-  private static async readTokenUncached(): Promise<string | null> {
+  private static async readTokenUncached(): Promise<ClaudeOAuthState & { expiresAt?: number }> {
+    const absent = { token: null, expired: false };
     try {
-      if (process.platform !== "darwin") return null;
+      if (process.platform !== "darwin") return absent;
 
       const username = userInfo().username;
       const { stdout } = await execFileAsync(
@@ -137,12 +159,13 @@ export class ClaudeClient {
       const creds = JSON.parse(String(stdout).trim());
       const oauth = creds?.claudeAiOauth;
       const token = oauth?.accessToken;
-      if (typeof token !== "string" || !token.startsWith("sk-ant-oat")) return null;
+      if (typeof token !== "string" || !token.startsWith("sk-ant-oat")) return absent;
+      const expiresAt = typeof oauth?.expiresAt === "number" ? oauth.expiresAt : undefined;
       // An expired token only produces a 401 and a pointless fallback round-trip
-      if (typeof oauth?.expiresAt === "number" && oauth.expiresAt < Date.now()) return null;
-      return token;
+      if (expiresAt != null && expiresAt < Date.now()) return { token: null, expired: true };
+      return { token, expired: false, expiresAt };
     } catch {
-      return null;
+      return absent;
     }
   }
 
@@ -172,8 +195,9 @@ export class ClaudeClient {
   }
 
   async fetchUsage(): Promise<ClaudeUsageData> {
-    const oauthToken = await ClaudeClient.readClaudeCodeOAuthToken();
+    const { token: oauthToken, expired } = await ClaudeClient.readClaudeCodeOAuthState();
     if (!oauthToken && !this.session) {
+      if (expired) throw new UpstreamAuthError(CLAUDE_OAUTH_EXPIRED_MESSAGE);
       throw new Error(
         "No Claude credentials: save a claude.ai session key in Settings or sign in to Claude Code."
       );

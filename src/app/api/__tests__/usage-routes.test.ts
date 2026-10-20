@@ -6,7 +6,7 @@ import { join } from "path";
 const mocks = vi.hoisted(() => ({
   claudeFetch: vi.fn(),
   openaiFetch: vi.fn(),
-  readToken: vi.fn(),
+  readState: vi.fn(),
   readCodexAuth: vi.fn(),
   claudeCtor: vi.fn(),
 }));
@@ -19,8 +19,11 @@ vi.mock("@/lib/providers/claude-client", () => ({
     fetchUsage() {
       return mocks.claudeFetch();
     }
-    static readClaudeCodeOAuthToken() {
-      return mocks.readToken();
+    static async readClaudeCodeOAuthState() {
+      return mocks.readState();
+    }
+    static async readClaudeCodeOAuthToken() {
+      return (await mocks.readState()).token;
     }
     static invalidateTokenCache() {}
   },
@@ -60,11 +63,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   caches.claudeUsageCache.invalidate("claude");
   caches.openaiUsageCache.invalidate("openai");
-  mocks.readToken.mockResolvedValue("oauth-token");
+  mocks.readState.mockResolvedValue({ token: "oauth-token", expired: false });
   mocks.readCodexAuth.mockReturnValue({ accessToken: "t", accountId: "a" });
   mocks.claudeFetch.mockResolvedValue(CLAUDE_DATA);
   mocks.openaiFetch.mockResolvedValue(OPENAI_DATA);
 });
+
+const NO_TOKEN = { token: null, expired: false };
+const EXPIRED_TOKEN = { token: null, expired: true };
 
 const req = (path: string) => new Request(`http://localhost${path}`);
 
@@ -85,12 +91,22 @@ describe("GET /api/usage/claude", () => {
   });
 
   it("401 MISSING_CREDENTIALS when no session and no OAuth token", async () => {
-    mocks.readToken.mockResolvedValue(null);
+    mocks.readState.mockResolvedValue(NO_TOKEN);
     const res = await claudeRoute.GET(req("/api/usage/claude"));
     expect(res.status).toBe(401);
     const json = await res.json();
     expect(json.success).toBe(false);
     expect(json.error.code).toBe("MISSING_CREDENTIALS");
+    expect(mocks.claudeFetch).not.toHaveBeenCalled();
+  });
+
+  it("401 AUTH_EXPIRED (not MISSING_CREDENTIALS) when the Keychain token expired and no session key", async () => {
+    mocks.readState.mockResolvedValue(EXPIRED_TOKEN);
+    const res = await claudeRoute.GET(req("/api/usage/claude"));
+    expect(res.status).toBe(401);
+    const json = await res.json();
+    expect(json.error.code).toBe("AUTH_EXPIRED");
+    expect(json.error.message).toMatch(/Claude Code sign-in expired/);
     expect(mocks.claudeFetch).not.toHaveBeenCalled();
   });
 
@@ -148,8 +164,18 @@ describe("GET /api/health", () => {
     });
   });
 
+  it("an expired Keychain token with no session key is configured but disconnected", async () => {
+    mocks.readState.mockResolvedValue(EXPIRED_TOKEN);
+    const json = await (await healthRoute.GET()).json();
+    expect(json.data.claude).toMatchObject({
+      configured: true,
+      connected: false,
+      code: "AUTH_EXPIRED",
+    });
+  });
+
   it("reports unconfigured providers", async () => {
-    mocks.readToken.mockResolvedValue(null);
+    mocks.readState.mockResolvedValue(NO_TOKEN);
     mocks.readCodexAuth.mockReturnValue(null);
     const json = await (await healthRoute.GET()).json();
     expect(json.data.claude).toMatchObject({ configured: false, connected: false, code: "MISSING_CREDENTIALS" });
@@ -157,7 +183,7 @@ describe("GET /api/health", () => {
   });
 
   it("treats saved session creds as configured without an OAuth token", async () => {
-    mocks.readToken.mockResolvedValue(null);
+    mocks.readState.mockResolvedValue(NO_TOKEN);
     creds.saveCredentials({ claude: { sessionKey: "sk", organizationId: "org" } });
     try {
       const json = await (await healthRoute.GET()).json();

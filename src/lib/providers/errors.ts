@@ -5,3 +5,7 @@ export class UpstreamAuthError extends Error {
     this.name = "UpstreamAuthError";
   }
 }
+
+/** Shared by the client and the usage service, which both detect a lapsed Keychain token. */
+export const CLAUDE_OAUTH_EXPIRED_MESSAGE =
+  "Claude Code sign-in expired. Run `claude` in a terminal to refresh it.";
