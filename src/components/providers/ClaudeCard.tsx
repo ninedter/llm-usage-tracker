@@ -14,11 +14,13 @@ export function ClaudeCard() {
   const { data, error, isLoading } = useClaudeUsage();
   const info = PROVIDER_INFO.claude;
 
-  if (isLoading && !data) return <CardSkeleton />;
+  // A retry in flight after an error is not a first load: keep the error UI up
+  if (isLoading && !data && !error) return <CardSkeleton />;
 
-  // Only a definitive "no credentials" answer earns the setup placeholder;
-  // any other failure keeps whatever data we have and shows the error banner
-  if (!data && error?.code === "MISSING_CREDENTIALS") {
+  // Only a definitive "no credentials" answer earns the setup placeholder —
+  // even over stale data, so deleting credentials clears the card. Any other
+  // failure keeps whatever data we have and shows the error banner.
+  if (error?.code === "MISSING_CREDENTIALS") {
     return (
       <ProviderCard
         name={info.displayName}
@@ -38,7 +40,7 @@ export function ClaudeCard() {
       name={info.displayName}
       color={info.color}
       icon={<ClaudeIcon />}
-      connected={!!data}
+      connected={!!data && !error}
       lastUpdated={data?.lastUpdated}
       error={error?.message}
     >

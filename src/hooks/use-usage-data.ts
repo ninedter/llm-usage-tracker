@@ -8,6 +8,7 @@ import type {
   ProviderHealth,
 } from "@/types";
 import { REFRESH_INTERVALS } from "@/lib/constants";
+import { usageRetryDelay } from "@/lib/usage/retry-delay";
 
 const CLAUDE_USAGE_KEY = "/api/usage/claude";
 const OPENAI_USAGE_KEY = "/api/usage/openai";
@@ -39,8 +40,8 @@ async function fetcher<T>(url: string): Promise<T> {
   return json.data as T;
 }
 
-// Retrying can't fix missing credentials — the user has to add them — so skip
-// the backoff loop for that code and keep SWR's default backoff otherwise.
+// SWR stops refreshInterval polling while an error is cached, so retries are
+// what keep a failed card polling (see usageRetryDelay for the schedule).
 const onErrorRetry: SWRConfiguration["onErrorRetry"] = (
   error: UsageFetchError,
   _key,
@@ -48,12 +49,10 @@ const onErrorRetry: SWRConfiguration["onErrorRetry"] = (
   revalidate,
   { retryCount }
 ) => {
-  if (error.code === "MISSING_CREDENTIALS") return;
   const max = config.errorRetryCount;
   if (max !== undefined && retryCount > max) return;
-  const timeout =
-    ~~((Math.random() + 0.5) * (1 << Math.min(retryCount, 8))) * config.errorRetryInterval;
-  setTimeout(revalidate, timeout, { retryCount });
+  const delay = usageRetryDelay(error.code, retryCount, config.errorRetryInterval);
+  setTimeout(revalidate, delay, { retryCount });
 };
 
 const usageConfig: SWRConfiguration = {
