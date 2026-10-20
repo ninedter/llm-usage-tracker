@@ -24,8 +24,10 @@ export function claudeCreditSummary(d: ClaudeUsageData): string | null {
 export function openaiCreditSummary(d: OpenAIUsageData): string | null {
   const c = d.credits;
   if (c?.unlimited) return "Unlimited";
-  if (c?.balance != null) return `${formatCredits(c.balance)} credits`;
-  if (c?.hasCredits) return "Credits available";
+  // A balance figure only counts while the account actually has credits
+  if (c?.hasCredits) {
+    return c.balance != null ? `${formatCredits(c.balance)} credits` : "Credits available";
+  }
   if (d.creditsDepleted) return "Credits depleted";
   return null;
 }

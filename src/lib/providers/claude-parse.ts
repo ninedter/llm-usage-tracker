@@ -25,26 +25,29 @@ interface UsageLimit {
   } | null;
 }
 
+// Numbers may arrive as numeric strings; num() normalizes both.
+type RawNumber = number | string | null;
+
 // Extra usage amounts are minor units (cents), not dollars.
 export interface ClaudeExtraUsageRaw {
   is_enabled?: boolean | null;
-  monthly_limit?: number | null; // missing/null = no cap
-  used_credits?: number | null;
-  utilization?: number | null; // 0-100
+  monthly_limit?: RawNumber; // missing/null = no cap
+  used_credits?: RawNumber;
+  utilization?: RawNumber; // 0-100
   currency?: string | null;
 }
 
 // claude.ai/api/organizations/{org}/prepaid/credits (cents)
 export interface ClaudePrepaidRaw {
-  amount?: number | null;
+  amount?: RawNumber;
   currency?: string | null;
 }
 
 // claude.ai/api/organizations/{org}/overage_spend_limit (cents)
 export interface ClaudeSpendLimitRaw {
   is_enabled?: boolean | null;
-  monthly_credit_limit?: number | null;
-  used_credits?: number | null;
+  monthly_credit_limit?: RawNumber;
+  used_credits?: RawNumber;
   currency?: string | null;
   out_of_credits?: boolean | null;
 }
@@ -62,7 +65,16 @@ export interface ClaudeUsageResponse {
   weekly_usage_percent?: number;
 }
 
-const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+// Upstream sometimes serializes amounts as numeric strings ("5000"); accept
+// those, but not "" (Number("") is 0) or garbage. null = no usable number.
+function num(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
 
 // Cents -> major units, rounded so float noise (1720.0000001) can't leak into the UI.
 const centsToMajor = (cents: number) => Math.round(cents) / 100;
@@ -77,20 +89,13 @@ export function parseExtraUsage(
   if (!raw && !spendLimit) return null;
 
   // extra_usage is authoritative; the spend-limit endpoint only fills what it omits.
-  const limitCents = finite(raw?.monthly_limit)
-    ? raw.monthly_limit
-    : finite(spendLimit?.monthly_credit_limit)
-      ? spendLimit.monthly_credit_limit
-      : null;
-  const usedCents = finite(raw?.used_credits)
-    ? raw.used_credits
-    : finite(spendLimit?.used_credits)
-      ? spendLimit.used_credits
-      : 0;
+  const limitCents = num(raw?.monthly_limit) ?? num(spendLimit?.monthly_credit_limit);
+  const usedCents = num(raw?.used_credits) ?? num(spendLimit?.used_credits) ?? 0;
 
-  let percentage: number | null = null;
-  if (finite(raw?.utilization)) percentage = raw.utilization;
-  else if (limitCents != null && limitCents > 0) percentage = (usedCents / limitCents) * 100;
+  // Upstream utilization wins; otherwise derive it from the cap
+  const percentage =
+    num(raw?.utilization) ??
+    (limitCents != null && limitCents > 0 ? (usedCents / limitCents) * 100 : null);
 
   return {
     enabled: raw?.is_enabled ?? spendLimit?.is_enabled ?? false,
@@ -109,8 +114,9 @@ export function parseExtraUsage(
 
 export function parsePrepaid(raw: ClaudePrepaidRaw | null | undefined): MoneyAmount | null {
   // A negative or non-numeric balance is a malformed response, not "no credit".
-  if (!raw || !finite(raw.amount) || raw.amount < 0) return null;
-  return { amount: centsToMajor(raw.amount), currency: normalizeCurrency(raw.currency) };
+  const amount = num(raw?.amount);
+  if (!raw || amount == null || amount < 0) return null;
+  return { amount: centsToMajor(amount), currency: normalizeCurrency(raw.currency) };
 }
 
 export function parseClaudeUsage(

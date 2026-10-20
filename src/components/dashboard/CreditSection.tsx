@@ -1,7 +1,7 @@
 "use client";
 
 interface CreditSectionProps {
-  /** Red pill beside the heading, e.g. "Out of credits" / "Credits depleted". */
+  /** Red pill beside the heading, e.g. "Out of credits" / "Depleted". */
   alert?: string;
   children: React.ReactNode;
 }

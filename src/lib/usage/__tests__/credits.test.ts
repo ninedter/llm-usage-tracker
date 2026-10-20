@@ -102,6 +102,21 @@ describe("openaiCreditSummary", () => {
     ).toBe("Credits available");
   });
 
+  it("ignores a balance figure when hasCredits is false", () => {
+    expect(
+      openaiCreditSummary(openai({ hasCredits: false, unlimited: false, balance: 240 }))
+    ).toBeNull();
+    expect(
+      openaiCreditSummary(openai({ hasCredits: false, unlimited: false, balance: 240 }, true))
+    ).toBe("Credits depleted");
+  });
+
+  it("unlimited wins even when hasCredits is false", () => {
+    expect(
+      openaiCreditSummary(openai({ hasCredits: false, unlimited: true, balance: 240 }))
+    ).toBe("Unlimited");
+  });
+
   it("reports depletion", () => {
     expect(
       openaiCreditSummary(

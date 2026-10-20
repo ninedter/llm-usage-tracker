@@ -62,6 +62,35 @@ describe("parseExtraUsage", () => {
     });
   });
 
+  it("accepts monthly_limit as a numeric string", () => {
+    const r = parseExtraUsage({ is_enabled: true, monthly_limit: "5000", used_credits: 1000 });
+    expect(r).toMatchObject({ monthlyLimit: 50, remaining: 40, percentage: 20 });
+  });
+
+  it("accepts used_credits as a numeric string", () => {
+    const r = parseExtraUsage({ is_enabled: true, used_credits: "277" });
+    expect(r!.used).toBe(2.77);
+  });
+
+  it("accepts utilization as a numeric string", () => {
+    const r = parseExtraUsage({
+      is_enabled: true,
+      monthly_limit: 5000,
+      used_credits: 1000,
+      utilization: "34.4",
+    });
+    expect(r!.percentage).toBe(34.4);
+  });
+
+  it("still rejects empty and non-numeric strings", () => {
+    const r = parseExtraUsage({
+      is_enabled: true,
+      monthly_limit: "",
+      used_credits: "abc",
+    });
+    expect(r).toMatchObject({ monthlyLimit: null, used: 0 });
+  });
+
   it("returns null with no extra usage data", () => {
     expect(parseExtraUsage(undefined, null)).toBeNull();
   });
@@ -78,6 +107,13 @@ describe("parsePrepaid", () => {
   it("rejects negative and non-finite amounts", () => {
     expect(parsePrepaid({ amount: -5 })).toBeNull();
     expect(parsePrepaid({ amount: NaN })).toBeNull();
+  });
+
+  it("accepts the amount as a numeric string", () => {
+    expect(parsePrepaid({ amount: "1234", currency: "usd" })).toEqual({
+      amount: 12.34,
+      currency: "USD",
+    });
   });
 
   it("defaults currency to USD", () => {
