@@ -35,12 +35,22 @@ export interface ModelUsage {
   level?: UsageLevel;
 }
 
-export interface BillingInfo {
-  currentSpend: number;
-  creditLimit: number;
-  creditRemaining: number;
+// Money in major units (dollars, not cents); currency is an upper-case ISO code.
+export interface MoneyAmount {
+  amount: number;
   currency: string;
-  resetDate: string | null;
+}
+
+// Claude "extra usage": metered overage billed after the plan's included usage.
+export interface ClaudeExtraUsage {
+  enabled: boolean;
+  currency: string; // default "USD"
+  monthlyLimit: number | null; // null = no cap
+  used: number; // 0 when upstream omits it
+  remaining: number | null; // max(0, monthlyLimit - used); null when no cap
+  percentage: number | null; // upstream utilization if finite, else used/limit*100, else null
+  level: UsageLevel; // getUsageLevel(percentage ?? 0)
+  outOfCredits: boolean; // spend-limit out_of_credits, else percentage >= 100
 }
 
 // --- Provider-specific Usage ---
@@ -49,7 +59,8 @@ export interface ClaudeUsageData {
   session: UsageWindow;
   weekly: UsageWindow;
   modelBreakdown: ModelUsage[];
-  billing?: BillingInfo;
+  extraUsage: ClaudeExtraUsage | null;
+  prepaidBalance: MoneyAmount | null;
   lastUpdated: string;
 }
 

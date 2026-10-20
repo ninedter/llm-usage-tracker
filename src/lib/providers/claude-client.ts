@@ -1,7 +1,7 @@
 import { execSync } from "child_process";
 import { userInfo } from "os";
 import type { ClaudeUsageData } from "@/types";
-import { getUsageLevel } from "../constants";
+import { parseClaudeUsage, type ClaudeUsageResponse } from "./claude-parse";
 
 const BROWSER_HEADERS: Record<string, string> = {
   Accept: "application/json",
@@ -17,39 +17,6 @@ function makeHeaders(sessionKey: string): Record<string, string> {
     ...BROWSER_HEADERS,
     Cookie: `sessionKey=${sessionKey}`,
   };
-}
-
-// Response from claude.ai/api/organizations/{orgId}/usage
-// AND api.anthropic.com/api/oauth/usage
-interface UsageBucket {
-  utilization?: number; // 0-100
-  resets_at?: string | null;
-}
-
-// Modern per-limit entries. Per-model usage (e.g. Fable) only appears here,
-// as weekly_scoped entries with scope.model — the seven_day_<model> buckets
-// are null on current plans.
-interface UsageLimit {
-  kind?: string; // "session" | "weekly_all" | "weekly_scoped" | ...
-  group?: string; // "session" | "weekly"
-  percent?: number; // 0-100
-  resets_at?: string | null;
-  scope?: {
-    model?: { id?: string | null; display_name?: string | null } | null;
-    surface?: string | null;
-  } | null;
-}
-
-interface UsageResponse {
-  five_hour?: UsageBucket;
-  seven_day?: UsageBucket;
-  seven_day_opus?: UsageBucket | null;
-  seven_day_sonnet?: UsageBucket | null;
-  seven_day_oauth_apps?: UsageBucket | null;
-  limits?: UsageLimit[] | null;
-  // Legacy field names (kept for backwards compat)
-  session_usage_percent?: number;
-  weekly_usage_percent?: number;
 }
 
 export class ClaudeClient {
@@ -154,7 +121,7 @@ export class ClaudeClient {
   /**
    * Fetch usage from the OAuth endpoint (covers web + desktop + code).
    */
-  static async fetchOAuthUsage(oauthToken: string): Promise<UsageResponse> {
+  static async fetchOAuthUsage(oauthToken: string): Promise<ClaudeUsageResponse> {
     const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
         Authorization: `Bearer ${oauthToken}`,
@@ -173,7 +140,7 @@ export class ClaudeClient {
   }
 
   async fetchUsage(): Promise<ClaudeUsageData> {
-    let usage: UsageResponse;
+    let usage: ClaudeUsageResponse;
 
     // Try OAuth token first (more reliable, covers all clients)
     const oauthToken = ClaudeClient.readClaudeCodeOAuthToken();
@@ -193,10 +160,10 @@ export class ClaudeClient {
       usage = await this.fetchSessionUsage();
     }
 
-    return this.parseUsageResponse(usage);
+    return parseClaudeUsage(usage);
   }
 
-  private async fetchSessionUsage(): Promise<UsageResponse> {
+  private async fetchSessionUsage(): Promise<ClaudeUsageResponse> {
     const headers = makeHeaders(this.sessionKey);
 
     const usageRes = await fetch(
@@ -216,91 +183,5 @@ export class ClaudeClient {
     }
 
     return usageRes.json();
-  }
-
-  private parseUsageResponse(usage: UsageResponse): ClaudeUsageData {
-    // New format: five_hour.utilization (0-100), seven_day.utilization (0-100)
-    const fiveHourUtil = usage.five_hour?.utilization ?? 0;
-    const sevenDayUtil = usage.seven_day?.utilization ?? 0;
-    const fiveHourReset = usage.five_hour?.resets_at ?? null;
-    const sevenDayReset = usage.seven_day?.resets_at ?? null;
-
-    // Legacy format fallback
-    const sessionPct =
-      fiveHourUtil > 0
-        ? fiveHourUtil
-        : (usage.session_usage_percent ?? 0) * 100;
-    const weeklyPct =
-      sevenDayUtil > 0
-        ? sevenDayUtil
-        : (usage.weekly_usage_percent ?? 0) * 100;
-
-    // Per-model breakdown from scoped limits entries (e.g. Fable, Opus).
-    // The scoped percent shares the weekly window, so it renders alongside
-    // the 7-day bar the same way the old seven_day_* buckets did.
-    const modelBreakdown: ClaudeUsageData["modelBreakdown"] = [];
-
-    for (const limit of usage.limits ?? []) {
-      const modelName = limit.scope?.model?.display_name;
-      if (modelName && limit.percent != null) {
-        modelBreakdown.push({
-          modelId: modelName.toLowerCase(),
-          modelName,
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: limit.percent,
-          level: getUsageLevel(limit.percent),
-        });
-      }
-    }
-
-    // Legacy seven_day_* buckets (null on current plans)
-    if (modelBreakdown.length === 0) {
-      if (usage.seven_day_opus?.utilization != null) {
-        const opusUtil = usage.seven_day_opus.utilization;
-        modelBreakdown.push({
-          modelId: "opus",
-          modelName: "Opus",
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: opusUtil,
-          level: getUsageLevel(opusUtil),
-        });
-      }
-
-      if (usage.seven_day_sonnet?.utilization != null) {
-        const sonnetUtil = usage.seven_day_sonnet.utilization;
-        modelBreakdown.push({
-          modelId: "sonnet",
-          modelName: "Sonnet",
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: sonnetUtil,
-          level: getUsageLevel(sonnetUtil),
-        });
-      }
-    }
-
-    return {
-      session: {
-        tokensUsed: 0,
-        tokenLimit: 0,
-        percentage: sessionPct,
-        resetTime: fiveHourReset,
-        level: getUsageLevel(sessionPct),
-      },
-      weekly: {
-        tokensUsed: 0,
-        tokenLimit: 0,
-        percentage: weeklyPct,
-        resetTime: sevenDayReset,
-        level: getUsageLevel(weeklyPct),
-      },
-      modelBreakdown,
-      lastUpdated: new Date().toISOString(),
-    };
   }
 }
