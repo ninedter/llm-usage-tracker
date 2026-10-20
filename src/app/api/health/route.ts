@@ -23,7 +23,7 @@ export async function GET(): Promise<
       const organizationId = creds.claude?.organizationId;
       if (!sessionKey || !organizationId) throw new Error("No credentials configured");
       await claudeUsageCache.get("claude", () =>
-        new ClaudeClient(sessionKey, organizationId).fetchUsage()
+        new ClaudeClient({ sessionKey, organizationId }).fetchUsage()
       );
     })(),
     (async () => {

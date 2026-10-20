@@ -7,6 +7,8 @@ import {
   type WhamResetCreditsResponse,
   type WhamUsageResponse,
 } from "./openai-parse";
+import { UpstreamAuthError } from "./errors";
+import { UPSTREAM_TIMEOUT_MS } from "../constants";
 
 export class OpenAIClient {
   constructor(
@@ -58,11 +60,12 @@ export class OpenAIClient {
         Accept: "application/json",
         "User-Agent": "codex-cli",
       },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
 
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
-        throw new Error(
+        throw new UpstreamAuthError(
           `Codex session token expired or invalid (${res.status}). Run \`codex\` in a terminal to refresh it.`
         );
       }

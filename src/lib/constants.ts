@@ -33,6 +33,9 @@ export const REFRESH_INTERVALS = {
   billing: 300_000,
 } as const;
 
+// Hard cap on every upstream (claude.ai / api.anthropic.com / chatgpt.com) request
+export const UPSTREAM_TIMEOUT_MS = 10_000;
+
 export const ARCHIVE_AFTER_MS = 30 * 60 * 1000; // 30 minutes
 
 export function getUsageLevel(percentage: number) {

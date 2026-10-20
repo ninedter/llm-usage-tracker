@@ -22,10 +22,10 @@ export async function GET(): Promise<
       );
     }
 
-    const client = new ClaudeClient(
-      creds.claude.sessionKey,
-      creds.claude.organizationId
-    );
+    const client = new ClaudeClient({
+      sessionKey: creds.claude.sessionKey,
+      organizationId: creds.claude.organizationId,
+    });
     const data = await claudeUsageCache.get("claude", () => client.fetchUsage());
 
     return NextResponse.json({ success: true, data });
