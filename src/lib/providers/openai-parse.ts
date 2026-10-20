@@ -37,8 +37,10 @@ export interface WhamUsageResponse {
     has_credits?: boolean;
     unlimited?: boolean;
     balance?: string | number | null;
+    overage_limit_reached?: boolean;
   } | null;
-  rate_limit_reached_type?: string | null;
+  // A string in older payloads, an object ({ type, details }) in live ones
+  rate_limit_reached_type?: string | { type?: unknown } | null;
 }
 
 // Response from chatgpt.com/backend-api/wham/rate-limit-reset-credits — the
@@ -103,6 +105,14 @@ export function parseCredits(raw: WhamUsageResponse["credits"]): OpenAICredits |
   };
 }
 
+function reachedTypeString(raw: WhamUsageResponse["rate_limit_reached_type"]): string {
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && typeof raw.type === "string") {
+    return raw.type;
+  }
+  return "";
+}
+
 export function parseOpenAIUsage(
   usage: WhamUsageResponse,
   creditDetails: WhamResetCreditsResponse | null
@@ -118,13 +128,17 @@ export function parseOpenAIUsage(
   const featureLimits: OpenAIRateWindow[] = [];
   for (const extra of usage.additional_rate_limits ?? []) {
     const name = extra.limit_name;
-    const raws = [extra.rate_limit?.primary_window, extra.rate_limit?.secondary_window];
-    const present = raws.filter((w) => parseWindow(w) !== null);
+    const parsed = [extra.rate_limit?.primary_window, extra.rate_limit?.secondary_window]
+      .map((raw) => ({ raw, win: parseWindow(raw) }))
+      .filter((p): p is { raw: WhamWindow; win: OpenAIRateWindow } => p.win !== null);
     // With two windows, disambiguate each by its duration
-    const suffix = present.length > 1;
-    for (const raw of present) {
-      const label = suffix ? `${name} · ${windowLabel(raw!.limit_window_seconds)}` : name;
-      featureLimits.push(parseWindow(raw, label)!);
+    for (const { win } of parsed) {
+      if (parsed.length > 1) {
+        win.label = name ? `${name} · ${win.label}` : win.label;
+      } else if (name) {
+        win.label = name;
+      }
+      featureLimits.push(win);
     }
   }
 
@@ -151,7 +165,9 @@ export function parseOpenAIUsage(
     resetCreditsAvailable: typeof availableCount === "number" ? availableCount : null,
     resetCredits,
     credits: parseCredits(usage.credits),
-    creditsDepleted: usage.rate_limit_reached_type?.endsWith("credits_depleted") ?? false,
+    creditsDepleted:
+      reachedTypeString(usage.rate_limit_reached_type).endsWith("credits_depleted") ||
+      usage.credits?.overage_limit_reached === true,
     lastUpdated: new Date().toISOString(),
   };
 }

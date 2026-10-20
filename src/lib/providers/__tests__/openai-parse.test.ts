@@ -58,6 +58,71 @@ describe("parseOpenAIUsage", () => {
     expect(parseOpenAIUsage({}, null).creditsDepleted).toBe(false);
   });
 
+  it("handles object-shaped rate_limit_reached_type", () => {
+    const depleted = parseOpenAIUsage(
+      { rate_limit_reached_type: { type: "workspace_member_credits_depleted" } },
+      null
+    );
+    expect(depleted.creditsDepleted).toBe(true);
+    const reached = parseOpenAIUsage(
+      { rate_limit_reached_type: { type: "rate_limit_reached", details: "default" } as never },
+      null
+    );
+    expect(reached.creditsDepleted).toBe(false);
+  });
+
+  it.each([42, [], {}, { type: 5 }])("does not throw on garbage reached type %j", (v) => {
+    const r = parseOpenAIUsage({ rate_limit_reached_type: v as never }, null);
+    expect(r.creditsDepleted).toBe(false);
+  });
+
+  it("treats overage_limit_reached as depleted", () => {
+    expect(
+      parseOpenAIUsage({ credits: { has_credits: true, overage_limit_reached: true } }, null)
+        .creditsDepleted
+    ).toBe(true);
+    expect(
+      parseOpenAIUsage({ credits: { has_credits: true, overage_limit_reached: false } }, null)
+        .creditsDepleted
+    ).toBe(false);
+  });
+
+  it("parses the live credits shape", () => {
+    const r = parseOpenAIUsage(
+      {
+        credits: {
+          has_credits: true,
+          unlimited: false,
+          overage_limit_reached: false,
+          balance: "60744.8007935000",
+          approx_local_messages: [],
+          approx_cloud_messages: [],
+        } as never,
+      },
+      null
+    );
+    expect(r.credits).toMatchObject({ hasCredits: true, unlimited: false });
+    expect(r.credits!.balance).toBeCloseTo(60744.8, 1);
+    expect(r.creditsDepleted).toBe(false);
+  });
+
+  it("uses plain window labels for a nameless two-window feature limit", () => {
+    const r = parseOpenAIUsage(
+      {
+        additional_rate_limits: [
+          {
+            rate_limit: {
+              primary_window: { used_percent: 10, limit_window_seconds: 18000 },
+              secondary_window: { used_percent: 40, limit_window_seconds: 604800 },
+            },
+          },
+        ],
+      },
+      null
+    );
+    expect(r.featureLimits.map((w) => w.label)).toEqual(["5-Hour Window", "7-Day Window"]);
+  });
+
   it("includes parsed credits", () => {
     const r = parseOpenAIUsage({ credits: { has_credits: true, balance: "5" } }, null);
     expect(r.credits).toEqual({ hasCredits: true, unlimited: false, balance: 5 });
