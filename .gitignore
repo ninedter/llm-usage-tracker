@@ -39,10 +39,6 @@ credentials.enc.json
 # vercel
 .vercel
 
-# electron
-/dist-electron/
-electron/*.js
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts

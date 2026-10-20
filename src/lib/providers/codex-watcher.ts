@@ -120,7 +120,7 @@ export function pollOnce(sessionsDir: string, sinceMs = 0, opts?: { broadcast?: 
  *
  * Polling (not fs.watch) is deliberate: fs.watch doesn't reliably deliver
  * events for Docker bind-mounts of macOS host dirs, so a single polling path
- * is what makes this work identically under Electron and Docker.
+ * is what makes this work identically under `next dev` and Docker.
  */
 export function startCodexWatcher(opts?: { intervalMs?: number; backfillDays?: number }): () => void {
   const home = codexHome();

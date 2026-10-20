@@ -2,7 +2,6 @@
   "name": "llm-usage-tracker",
   "version": "0.1.0",
   "private": true,
-  "main": "electron/main.js",
   "author": "LLM Usage Tracker",
   "description": "Monitor your AI usage and Claude Code agent activity",
   "scripts": {
@@ -11,14 +10,9 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:edge": "node --test edge/test/",
+    "test:edge": "npm --prefix edge test",
     "test:watch": "vitest",
     "db:export": "bash scripts/db-export.sh",
-    "electron:dev": "tsc -p electron/tsconfig.json && concurrently --kill-others \"next dev -p 3123\" \"wait-on http://127.0.0.1:3123 && NODE_ENV=development ELECTRON_DEV_PORT=3123 electron .\"",
-    "electron:compile": "tsc -p electron/tsconfig.json",
-    "electron:preview": "npm run build && npm run electron:compile && electron .",
-    "electron:build": "npm run electron:clean && npm run build && npm run electron:compile && electron-builder",
-    "electron:clean": "rm -rf dist-electron .next",
     "postbuild": "rm -rf .next/standalone/.next/static .next/standalone/public && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public"
   },
   "dependencies": {
@@ -31,105 +25,13 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "concurrently": "^9.1.2",
-    "electron": "^35.1.2",
-    "electron-builder": "^26.0.12",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^2.1.9",
-    "wait-on": "^8.0.3"
-  },
-  "build": {
-    "appId": "com.llmusage.tracker",
-    "productName": "LLM Usage Tracker",
-    "directories": {
-      "output": "dist-electron"
-    },
-    "asar": false,
-    "files": [
-      "electron/**/*.js",
-      "package.json",
-      "!node_modules{,/**/*}",
-      "!dist-electron{,/**/*}"
-    ],
-    "extraResources": [
-      {
-        "from": ".next/standalone",
-        "to": ".next/standalone",
-        "filter": [
-          "**/*",
-          "!.data{,/**/*}",
-          "!.docker-data{,/**/*}",
-          "!.claude{,/**/*}",
-          "!.env*",
-          "!credentials.enc.json",
-          "!dist-electron{,/**/*}",
-          "!docs{,/**/*}",
-          "!src{,/**/*}",
-          "!*.md",
-          "!package-lock.json",
-          "!tsconfig.tsbuildinfo"
-        ]
-      },
-      {
-        "from": ".next/standalone/node_modules",
-        "to": ".next/standalone/node_modules",
-        "filter": [
-          "**/*",
-          "!typescript{,/**/*}"
-        ]
-      }
-    ],
-    "icon": "build/icon.png",
-    "mac": {
-      "icon": "build/icon.icns",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": ["arm64"]
-        },
-        {
-          "target": "zip",
-          "arch": ["arm64"]
-        }
-      ],
-      "category": "public.app-category.utilities",
-      "hardenedRuntime": false,
-      "identity": null
-    },
-    "win": {
-      "target": "nsis"
-    },
-    "linux": {
-      "target": "AppImage",
-      "category": "Utility"
-    },
-    "npmRebuild": false,
-    "dmg": {
-      "contents": [
-        {
-          "x": 130,
-          "y": 220
-        },
-        {
-          "x": 410,
-          "y": 220,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ],
-      "window": {
-        "width": 540,
-        "height": 380
-      },
-      "icon": "build/icon.icns",
-      "iconSize": 80,
-      "background": null
-    }
+    "vitest": "^5.0.5"
   }
 }
