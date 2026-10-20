@@ -28,28 +28,47 @@ interface UsageLimit {
 // Numbers may arrive as numeric strings; num() normalizes both.
 type RawNumber = number | string | null;
 
-// Extra usage amounts are minor units (cents), not dollars.
+// Amounts are minor units (cents for USD), not dollars. Checked against live
+// claude.ai responses (Oct 2026): prepaid `amount` and spend-limit
+// `monthly_credit_limit` equal the `amount_minor` of their balance/cap objects,
+// whose `exponent` is 2.
+interface MinorUnitsRaw {
+  amount_minor?: RawNumber;
+  exponent?: RawNumber;
+}
+
+interface MoneyOrCreditsRaw {
+  money?: MinorUnitsRaw | null;
+  credits?: MinorUnitsRaw | null;
+}
+
 export interface ClaudeExtraUsageRaw {
   is_enabled?: boolean | null;
   monthly_limit?: RawNumber; // missing/null = no cap
   used_credits?: RawNumber;
   utilization?: RawNumber; // 0-100
   currency?: string | null;
+  decimal_places?: RawNumber; // minor-unit exponent; null on live responses so far
+  spend_limit_reached?: boolean | null;
 }
 
-// claude.ai/api/organizations/{org}/prepaid/credits (cents)
+// claude.ai/api/organizations/{org}/prepaid/credits
 export interface ClaudePrepaidRaw {
   amount?: RawNumber;
   currency?: string | null;
+  balance?: MoneyOrCreditsRaw | null;
 }
 
-// claude.ai/api/organizations/{org}/overage_spend_limit (cents)
+// claude.ai/api/organizations/{org}/overage_spend_limit
 export interface ClaudeSpendLimitRaw {
   is_enabled?: boolean | null;
   monthly_credit_limit?: RawNumber;
   used_credits?: RawNumber;
   currency?: string | null;
+  // Live responses set this while extra usage is switched off (disabled_reason
+  // "self_selected_spend_limit_reached"), so it only counts when enabled
   out_of_credits?: boolean | null;
+  cap?: MoneyOrCreditsRaw | null;
 }
 
 export interface ClaudeUsageResponse {
@@ -76,8 +95,19 @@ function num(v: unknown): number | null {
   return null;
 }
 
-// Cents -> major units, rounded so float noise (1720.0000001) can't leak into the UI.
-const centsToMajor = (cents: number) => Math.round(cents) / 100;
+const DEFAULT_EXPONENT = 2;
+
+// A usable minor-unit exponent (0-6), or null so the caller falls back.
+function exponentOf(v: unknown): number | null {
+  const n = num(v);
+  return n != null && Number.isInteger(n) && n >= 0 && n <= 6 ? n : null;
+}
+
+const exponentFrom = (x: MoneyOrCreditsRaw | null | undefined) =>
+  exponentOf(x?.money?.exponent) ?? exponentOf(x?.credits?.exponent);
+
+// Minor -> major units, rounded so float noise (1720.0000001) can't leak into the UI.
+const toMajor = (minor: number, exponent: number) => Math.round(minor) / 10 ** exponent;
 
 const normalizeCurrency = (c: string | null | undefined) =>
   typeof c === "string" && c.trim() ? c.trim().toUpperCase() : "USD";
@@ -92,23 +122,33 @@ export function parseExtraUsage(
   const limitCents = num(raw?.monthly_limit) ?? num(spendLimit?.monthly_credit_limit);
   const usedCents = num(raw?.used_credits) ?? num(spendLimit?.used_credits) ?? 0;
 
+  const exp =
+    exponentOf(raw?.decimal_places) ?? exponentFrom(spendLimit?.cap) ?? DEFAULT_EXPONENT;
+
   // Upstream utilization wins; otherwise derive it from the cap
   const percentage =
     num(raw?.utilization) ??
     (limitCents != null && limitCents > 0 ? (usedCents / limitCents) * 100 : null);
 
+  const enabled = raw?.is_enabled ?? spendLimit?.is_enabled ?? false;
+  // Extra usage that's switched off can't run out; the card already says "off"
+  const outOfCredits =
+    enabled &&
+    (typeof raw?.spend_limit_reached === "boolean"
+      ? raw.spend_limit_reached
+      : typeof spendLimit?.out_of_credits === "boolean"
+        ? spendLimit.out_of_credits
+        : percentage != null && percentage >= 100);
+
   return {
-    enabled: raw?.is_enabled ?? spendLimit?.is_enabled ?? false,
+    enabled,
     currency: normalizeCurrency(raw?.currency ?? spendLimit?.currency),
-    monthlyLimit: limitCents != null ? centsToMajor(limitCents) : null,
-    used: centsToMajor(usedCents),
-    remaining: limitCents != null ? centsToMajor(Math.max(0, limitCents - usedCents)) : null,
+    monthlyLimit: limitCents != null ? toMajor(limitCents, exp) : null,
+    used: toMajor(usedCents, exp),
+    remaining: limitCents != null ? toMajor(Math.max(0, limitCents - usedCents), exp) : null,
     percentage,
     level: getUsageLevel(percentage ?? 0),
-    outOfCredits:
-      typeof spendLimit?.out_of_credits === "boolean"
-        ? spendLimit.out_of_credits
-        : percentage != null && percentage >= 100,
+    outOfCredits,
   };
 }
 
@@ -116,12 +156,17 @@ export function parsePrepaid(raw: ClaudePrepaidRaw | null | undefined): MoneyAmo
   // A negative or non-numeric balance is a malformed response, not "no credit".
   const amount = num(raw?.amount);
   if (!raw || amount == null || amount < 0) return null;
-  return { amount: centsToMajor(amount), currency: normalizeCurrency(raw.currency) };
+  const exp = exponentFrom(raw.balance) ?? DEFAULT_EXPONENT;
+  return { amount: toMajor(amount, exp), currency: normalizeCurrency(raw.currency) };
 }
 
 export function parseClaudeUsage(
   usage: ClaudeUsageResponse,
-  extras?: { prepaid?: ClaudePrepaidRaw | null; spendLimit?: ClaudeSpendLimitRaw | null }
+  extras?: {
+    prepaid?: ClaudePrepaidRaw | null;
+    spendLimit?: ClaudeSpendLimitRaw | null;
+    sessionKeyExpired?: boolean;
+  }
 ): ClaudeUsageData {
   // New format: five_hour.utilization (0-100), seven_day.utilization (0-100)
   const fiveHourUtil = usage.five_hour?.utilization;
@@ -203,6 +248,7 @@ export function parseClaudeUsage(
     modelBreakdown,
     extraUsage: parseExtraUsage(usage.extra_usage, extras?.spendLimit),
     prepaidBalance: parsePrepaid(extras?.prepaid),
+    sessionKeyExpired: extras?.sessionKeyExpired ?? false,
     lastUpdated: new Date().toISOString(),
   };
 }

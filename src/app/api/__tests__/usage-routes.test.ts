@@ -154,6 +154,13 @@ describe("GET /api/health", () => {
     expect(json.data.openai).toEqual({ configured: true, connected: true });
   });
 
+  it("connected Claude with an expired session key carries a warning", async () => {
+    mocks.claudeFetch.mockResolvedValue({ ...CLAUDE_DATA, sessionKeyExpired: true });
+    const json = await (await healthRoute.GET()).json();
+    expect(json.data.claude).toMatchObject({ configured: true, connected: true });
+    expect(json.data.claude.warning).toMatch(/session key expired/);
+  });
+
   it("reports AUTH_EXPIRED as configured but disconnected", async () => {
     mocks.claudeFetch.mockRejectedValue(new UpstreamAuthError("expired"));
     const json = await (await healthRoute.GET()).json();

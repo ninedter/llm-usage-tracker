@@ -36,14 +36,19 @@ export function ProviderStatus() {
               <div className="flex min-w-0 items-center gap-2">
                 <span
                   className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${
-                    health.connected
+                    health.connected && !health.warning
                       ? "bg-emerald-500"
                       : health.configured
                         ? "bg-amber-500"
                         : "bg-zinc-300 dark:bg-zinc-600"
                   }`}
                 />
-                {health.connected ? (
+                {health.connected && health.warning ? (
+                  // Usage works, but a secondary credential (session key) lapsed
+                  <span className="break-words text-right text-xs text-amber-600 dark:text-amber-400">
+                    Connected · {health.warning}
+                  </span>
+                ) : health.connected ? (
                   <span className="text-xs text-zinc-500">Connected</span>
                 ) : health.configured ? (
                   // Credentials exist but the upstream call failed (expired

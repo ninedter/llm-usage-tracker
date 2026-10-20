@@ -1,7 +1,7 @@
 "use client";
 
 import { useClaudeUsage } from "@/hooks/use-usage-data";
-import { PROVIDER_INFO } from "@/lib/constants";
+import { CLAUDE_SESSION_KEY_EXPIRED_HINT, PROVIDER_INFO } from "@/lib/constants";
 import { ProviderCard } from "@/components/dashboard/ProviderCard";
 import { UsageBar } from "@/components/dashboard/UsageBar";
 import { UsageStat } from "@/components/dashboard/UsageStat";
@@ -76,8 +76,12 @@ export function ClaudeCard() {
             </div>
           )}
 
-          {(data.extraUsage || data.prepaidBalance) && (
-            <ClaudeCredits extraUsage={data.extraUsage} prepaidBalance={data.prepaidBalance} />
+          {(data.extraUsage || data.prepaidBalance || data.sessionKeyExpired) && (
+            <ClaudeCredits
+              extraUsage={data.extraUsage}
+              prepaidBalance={data.prepaidBalance}
+              sessionKeyExpired={data.sessionKeyExpired}
+            />
           )}
 
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
@@ -92,12 +96,20 @@ export function ClaudeCard() {
 function ClaudeCredits({
   extraUsage: x,
   prepaidBalance,
+  sessionKeyExpired,
 }: {
   extraUsage: ClaudeExtraUsage | null;
   prepaidBalance: MoneyAmount | null;
+  sessionKeyExpired: boolean;
 }) {
   return (
     <CreditSection alert={x?.outOfCredits ? "Out of credits" : undefined}>
+      {sessionKeyExpired && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          {CLAUDE_SESSION_KEY_EXPIRED_HINT}
+        </p>
+      )}
+
       {prepaidBalance && (
         <UsageStat
           label="Prepaid balance"

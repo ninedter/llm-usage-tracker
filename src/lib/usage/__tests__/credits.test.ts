@@ -34,6 +34,7 @@ const claude = (over: Partial<ClaudeUsageData>): ClaudeUsageData => ({
   modelBreakdown: [],
   extraUsage: null,
   prepaidBalance: null,
+  sessionKeyExpired: false,
   lastUpdated: "",
   ...over,
 });
@@ -59,6 +60,14 @@ describe("claudeCreditSummary", () => {
       extraUsage: extra({ monthlyLimit: 50, used: 17.2, remaining: 32.8 }),
     });
     expect(claudeCreditSummary(d)).toBe("$12.34 left");
+  });
+
+  it("an empty prepaid balance doesn't hide extra-usage headroom", () => {
+    const d = claude({
+      prepaidBalance: { amount: 0, currency: "USD" },
+      extraUsage: extra({ monthlyLimit: 50, used: 17.2, remaining: 32.8 }),
+    });
+    expect(claudeCreditSummary(d)).toBe("$32.80 left");
   });
 
   it("shows remaining extra usage when capped", () => {

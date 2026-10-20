@@ -4,10 +4,19 @@ import {
   getOpenAIUsage,
   type UsageResult,
 } from "@/lib/providers/usage-service";
-import type { ApiResponse, ProviderHealth, ProviderHealthEntry } from "@/types";
+import { CLAUDE_SESSION_KEY_EXPIRED_HINT } from "@/lib/constants";
+import type {
+  ApiResponse,
+  ClaudeUsageData,
+  ProviderHealth,
+  ProviderHealthEntry,
+} from "@/types";
 
-function toEntry<T>(result: UsageResult<T>): ProviderHealthEntry {
-  if (result.ok) return { configured: true, connected: true };
+function toEntry<T>(result: UsageResult<T>, warning?: (data: T) => string | undefined): ProviderHealthEntry {
+  if (result.ok) {
+    const w = warning?.(result.data);
+    return w ? { configured: true, connected: true, warning: w } : { configured: true, connected: true };
+  }
   return {
     configured: result.code !== "MISSING_CREDENTIALS",
     connected: false,
@@ -24,6 +33,9 @@ export async function GET(): Promise<
   const [claude, openai] = await Promise.all([getClaudeUsage(), getOpenAIUsage()]);
   return NextResponse.json({
     success: true,
-    data: { claude: toEntry(claude), openai: toEntry(openai) },
+    data: { claude: toEntry(claude, claudeWarning), openai: toEntry(openai) },
   });
 }
+
+const claudeWarning = (d: ClaudeUsageData) =>
+  d.sessionKeyExpired ? CLAUDE_SESSION_KEY_EXPIRED_HINT : undefined;

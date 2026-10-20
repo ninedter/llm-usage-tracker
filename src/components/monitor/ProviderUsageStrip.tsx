@@ -3,6 +3,7 @@
 import { useClaudeUsage, useOpenAIUsage } from "@/hooks/use-usage-data";
 import { PROVIDER_INFO } from "@/lib/constants";
 import { claudeCreditSummary, openaiCreditSummary } from "@/lib/usage/credits";
+import { dataUnlessUnconfigured } from "@/lib/usage/stale-data";
 import {
   claudeShortestWindow,
   openaiShortestWindow,
@@ -23,8 +24,11 @@ const BAR_COLORS: Record<UsageLevel, string> = {
  * limits change. Add-on credit balances ride along in a right-hand column.
  */
 export function ProviderUsageStrip() {
-  const { data: claude } = useClaudeUsage();
-  const { data: openai } = useOpenAIUsage();
+  const { data: claudeData, error: claudeError } = useClaudeUsage();
+  const { data: openaiData, error: openaiError } = useOpenAIUsage();
+  // Deleted credentials leave stale SWR data behind: hide that provider's row
+  const claude = dataUnlessUnconfigured(claudeData, claudeError);
+  const openai = dataUnlessUnconfigured(openaiData, openaiError);
 
   const rows: StripRowData[] = [];
   const claudeWindow = claude ? claudeShortestWindow(claude) : null;

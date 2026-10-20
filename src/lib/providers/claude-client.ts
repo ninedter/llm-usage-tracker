@@ -42,8 +42,29 @@ export interface ClaudeSessionCreds {
   organizationId: string;
 }
 
+interface ClaudeExtras {
+  prepaid: ClaudePrepaidRaw | null;
+  spendLimit: ClaudeSpendLimitRaw | null;
+  /** The saved claude.ai session key was rejected, so prepaid/spend data is missing. */
+  sessionKeyExpired: boolean;
+}
+
+type OptionalJson<T> = { data: T | null; authRejected: boolean };
+
 export class ClaudeClient {
   constructor(private session: ClaudeSessionCreds | null) {}
+
+  /**
+   * After the credit endpoints reject a session key, skip them for this long
+   * instead of firing two doomed requests on every poll. Keyed by the session
+   * key itself, so saving a new key in Settings retries right away.
+   */
+  private static creditsBackoff: { sessionKey: string; until: number } | null = null;
+  private static readonly CREDITS_BACKOFF_MS = 15 * 60 * 1000;
+
+  static resetCreditsBackoff(): void {
+    ClaudeClient.creditsBackoff = null;
+  }
 
   static async fetchOrganizations(
     sessionKey: string
@@ -204,9 +225,9 @@ export class ClaudeClient {
     }
 
     // Credit endpoints are session-only and best-effort; start them alongside usage
-    const extrasPromise = this.session
+    const extrasPromise: Promise<ClaudeExtras> = this.session
       ? this.fetchExtras(this.session)
-      : Promise.resolve({ prepaid: null, spendLimit: null });
+      : Promise.resolve({ prepaid: null, spendLimit: null, sessionKeyExpired: false });
 
     const usage = await this.fetchUsageBody(oauthToken);
     const extras = await extrasPromise;
@@ -248,30 +269,46 @@ export class ClaudeClient {
     return usageRes.json();
   }
 
-  private async fetchExtras(
-    session: ClaudeSessionCreds
-  ): Promise<{ prepaid: ClaudePrepaidRaw | null; spendLimit: ClaudeSpendLimitRaw | null }> {
+  private async fetchExtras(session: ClaudeSessionCreds): Promise<ClaudeExtras> {
+    const backoff = ClaudeClient.creditsBackoff;
+    if (backoff?.sessionKey === session.sessionKey && Date.now() < backoff.until) {
+      return { prepaid: null, spendLimit: null, sessionKeyExpired: true };
+    }
+
     const [prepaid, spendLimit] = await Promise.all([
       this.fetchOptionalJson<ClaudePrepaidRaw>(session, "prepaid/credits"),
       this.fetchOptionalJson<ClaudeSpendLimitRaw>(session, "overage_spend_limit"),
     ]);
-    return { prepaid, spendLimit };
+
+    // Expired only when a credential was rejected and nothing got through: a
+    // lone 403 next to a 200 is more likely an endpoint this org can't use.
+    const results = [prepaid, spendLimit];
+    const sessionKeyExpired =
+      results.some((r) => r.authRejected) && results.every((r) => r.data == null);
+    ClaudeClient.creditsBackoff = sessionKeyExpired
+      ? { sessionKey: session.sessionKey, until: Date.now() + ClaudeClient.CREDITS_BACKOFF_MS }
+      : null;
+
+    return { prepaid: prepaid.data, spendLimit: spendLimit.data, sessionKeyExpired };
   }
 
-  /** Best-effort GET: any failure (network, timeout, non-2xx, bad JSON) is null. */
+  /**
+   * Best-effort GET: any failure (network, timeout, non-2xx, bad JSON) yields
+   * null data; a 401/403 is flagged so an expired session key can be reported.
+   */
   private async fetchOptionalJson<T>(
     session: ClaudeSessionCreds,
     path: string
-  ): Promise<T | null> {
+  ): Promise<OptionalJson<T>> {
     try {
       const res = await fetch(
         `https://claude.ai/api/organizations/${session.organizationId}/${path}`,
         { headers: makeHeaders(session.sessionKey), signal: timeoutSignal() }
       );
-      if (!res.ok) return null;
-      return (await res.json()) as T;
+      if (!res.ok) return { data: null, authRejected: res.status === 401 || res.status === 403 };
+      return { data: (await res.json()) as T, authRejected: false };
     } catch {
-      return null;
+      return { data: null, authRejected: false };
     }
   }
 }
