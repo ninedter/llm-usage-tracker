@@ -111,9 +111,16 @@ export interface ApiResponse<T> {
   };
 }
 
+export interface ProviderHealthEntry {
+  configured: boolean;
+  connected: boolean;
+  error?: string;
+  code?: "MISSING_CREDENTIALS" | "AUTH_EXPIRED" | "FETCH_ERROR";
+}
+
 export interface ProviderHealth {
-  claude: { connected: boolean; error?: string };
-  openai: { connected: boolean; error?: string };
+  claude: ProviderHealthEntry;
+  openai: ProviderHealthEntry;
 }
 
 // --- Agent Monitor ---

@@ -1,43 +1,29 @@
 import { NextResponse } from "next/server";
-import { getCredentials } from "@/lib/credentials";
-import { ClaudeClient } from "@/lib/providers/claude-client";
-import { OpenAIClient } from "@/lib/providers/openai-client";
-import { claudeUsageCache, openaiUsageCache } from "@/lib/providers/usage-cache";
-import type { ApiResponse, ProviderHealth } from "@/types";
+import {
+  getClaudeUsage,
+  getOpenAIUsage,
+  type UsageResult,
+} from "@/lib/providers/usage-service";
+import type { ApiResponse, ProviderHealth, ProviderHealthEntry } from "@/types";
+
+function toEntry<T>(result: UsageResult<T>): ProviderHealthEntry {
+  if (result.ok) return { configured: true, connected: true };
+  return {
+    configured: result.code !== "MISSING_CREDENTIALS",
+    connected: false,
+    error: result.message,
+    code: result.code,
+  };
+}
 
 export async function GET(): Promise<
   NextResponse<ApiResponse<ProviderHealth>>
 > {
-  const creds = getCredentials();
-  const health: ProviderHealth = {
-    claude: { connected: false },
-    openai: { connected: false },
-  };
-
-  // Parallelize the two upstream checks (previously serial, ~1.43s) and reuse
-  // the same 30s-TTL cache the usage routes populate, so a healthy dashboard
-  // poll doesn't force a second round-trip to either SaaS.
-  const [claudeResult, openaiResult] = await Promise.allSettled([
-    (async () => {
-      const sessionKey = creds.claude?.sessionKey;
-      const organizationId = creds.claude?.organizationId;
-      if (!sessionKey || !organizationId) throw new Error("No credentials configured");
-      await claudeUsageCache.get("claude", () =>
-        new ClaudeClient({ sessionKey, organizationId }).fetchUsage()
-      );
-    })(),
-    (async () => {
-      const codexAuth = OpenAIClient.readCodexAuth();
-      if (!codexAuth) throw new Error("Codex CLI not logged in");
-      await openaiUsageCache.get("openai", () =>
-        new OpenAIClient(codexAuth.accessToken, codexAuth.accountId).fetchUsage()
-      );
-    })(),
-  ]);
-  health.claude.connected = claudeResult.status === "fulfilled";
-  if (claudeResult.status === "rejected") health.claude.error = claudeResult.reason instanceof Error ? claudeResult.reason.message : "Unknown error";
-  health.openai.connected = openaiResult.status === "fulfilled";
-  if (openaiResult.status === "rejected") health.openai.error = openaiResult.reason instanceof Error ? openaiResult.reason.message : "Unknown error";
-
-  return NextResponse.json({ success: true, data: health });
+  // Parallel upstream checks sharing the 30s usage cache that the usage
+  // routes populate, so a healthy dashboard poll adds no extra round-trips.
+  const [claude, openai] = await Promise.all([getClaudeUsage(), getOpenAIUsage()]);
+  return NextResponse.json({
+    success: true,
+    data: { claude: toEntry(claude), openai: toEntry(openai) },
+  });
 }
