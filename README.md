@@ -7,7 +7,7 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 ![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-node22--slim-2496ED?logo=docker&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-194%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-274%20passing-brightgreen)
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -37,6 +37,8 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 
 **Quota monitoring.** Reads your real subscription usage straight from the providers: Claude's 5-hour and 7-day windows (with per-model breakdown, e.g. a scoped Fable/Opus limit) via your claude.ai session or Claude Code's OAuth token, and ChatGPT/Codex rate-limit windows via your Codex CLI login. No API keys are spent to do this — it reads the same usage endpoints the official apps use.
 
+**Add-on credits.** Beyond the quota windows, the dashboard shows the money-like balances that kick in when a window runs out: Claude's prepaid credit balance and this month's extra usage, and Codex's credit balance.
+
 **Agent activity tracking.** A tiny hook script forwards every Claude Code lifecycle event (all 7 hook types) to the tracker, and a built-in watcher tails Codex CLI rollout logs. Every session, agent, subagent, tool call, and touched file lands in a local SQLite database and streams live into the UI over SSE.
 
 **Token accounting for both providers.** Hook events don't carry token counts, so a second watcher derives Claude's per-model usage (input/output/cache read/cache write) from the transcripts Claude Code writes under `~/.claude/projects` — subagents included — while the Codex ingester reads cumulative totals from rollout logs. Every analytics view has real token data for Claude, OpenAI, and both combined.
@@ -51,7 +53,17 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 
 ### Dashboard — quota at a glance
 
-Both providers side by side: Claude's 5-hour session window, 7-day window, and per-model scoped limits; OpenAI's 7-day window, per-feature limits, and available rate-limit resets. Cards auto-refresh every 60 s and can be refreshed manually.
+Both providers side by side: Claude's 5-hour session window, 7-day window, and per-model scoped limits; OpenAI's 7-day window, per-feature limits, and available rate-limit resets. Cards auto-refresh every 60 s; the Refresh button bypasses the 30 s server cache and fetches fresh data.
+
+**Add-on credits.** Each card can show what happens beyond the included quota:
+
+- **Claude — "Add-on credits" section.** The *prepaid balance*, plus *this month's extra usage*: spent, monthly cap, remaining and % used. It reads "no monthly cap" when uncapped and "Extra usage is off" when disabled, and an **Out of credits** pill appears when the balance is exhausted. The prepaid balance is only exposed by claude.ai, so it needs a claude.ai session key saved in Settings; extra usage works with Claude Code's OAuth token alone.
+- **OpenAI — Codex credits.** Read from the `credits` field of the Codex usage endpoint: "N credits", "Unlimited", or "Credits available", with a **Depleted** pill when the workspace's credits are depleted or its overage limit is reached.
+- **Monitor strip.** The same figures appear as a compact credit readout on each provider row (hidden on phones).
+
+If an upstream call fails, the card shows the real error alongside the last good data instead of falling back to "configure credentials". Upstream requests time out after 10 s.
+
+> These figures come from undocumented endpoints — the same ones the official Claude and Codex apps use — so they can change without notice.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -84,7 +96,7 @@ Since both providers here run flat subscriptions (cost $0), "top model" and the 
 ### Settings — credentials, display, data
 
 - **Hub** — the hub URL edge machines post to (`NEXT_PUBLIC_HUB_URL`), read-only: it's read from the running container's environment, not from the browser, so what you see is what the hub is actually configured with.
-- **Claude credentials** — paste a claude.ai session key, pick your organization; stored encrypted (AES-256-GCM) on disk. If you use Claude Code, the app can read its OAuth token from the macOS Keychain instead — zero setup.
+- **Claude credentials** — Claude quota works with only Claude Code's OAuth token (read from the macOS Keychain, zero setup); the session key is optional. Paste a claude.ai session key and pick your organization to also see the **prepaid credit balance** (claude.ai is the only place that exposes it). Stored encrypted (AES-256-GCM) on disk.
 - **Monitor display** — font-size ladder for the monitor panel with a live preview.
 - **Data management** — database size and row counts, age-based purge with an exact preview of what would be deleted (daily cost summaries are preserved), optional automatic retention (runs about once a day), and a full wipe.
 
@@ -200,6 +212,7 @@ One caveat: a `--resume`d session copies its inherited history into a new transc
 Zero setup if you use the Codex CLI:
 
 - **Quota** — the dashboard reads your ChatGPT/Codex rate-limit windows using the OAuth credentials in `~/.codex/auth.json`.
+- **Credits** — the same usage response carries your Codex credit balance, shown on the OpenAI card (see [Dashboard](#dashboard--quota-at-a-glance)).
 - **Activity** — the server tails `~/.codex/sessions/**/rollout-*.jsonl` (4-second tail of today's directory, full rescan once a minute, byte-offset cursors so nothing is re-read), converting Codex turns into the same sessions/agents/events model. In Docker, `~/.codex` is mounted read-only; tokens never leave the machine.
 - In analytics, Codex `exec` shell commands are classified by verb into explore vs. modify so the ratio stays honest across both providers.
 
@@ -225,6 +238,10 @@ docker compose up -d --build
 | `INGEST_TOKEN` | *(unset)* | Shared bearer token for `/api/ingest/v1`. **Unset means every ingest is refused with 503** — a hub on a tailnet must never accept anonymous writes. |
 | `NEXT_PUBLIC_HUB_URL` | `http://henrys-mac-mini:3789` | Where edge machines post. Env-only: no hostname is hardcoded in the app. |
 | `TZ` | `Asia/Phnom_Penh` | Day bucketing for `localtime` rollups. |
+| `CLAUDE_CODE_USER_AGENT` | `claude-code/2.0.32` | `User-Agent` sent with the Claude Code OAuth usage request. Override if Anthropic starts rejecting the default. |
+| `CLAUDE_WEB_USER_AGENT` | recent desktop Chrome UA | `User-Agent` sent with claude.ai session-key requests (usage, prepaid balance). Override if claude.ai starts rejecting it. |
+
+The two `*_USER_AGENT` variables are optional and read at request time; `docker-compose.yml` does not pass them through by default, so add them under `environment:` to use them in the container.
 
 Auth v1 is a shared bearer token over plain HTTP on the tailnet — Tailscale provides the transport security. No mTLS, and SQLite stays the single-writer store; a multi-replica VPS deployment would need Postgres instead.
 
@@ -302,9 +319,9 @@ All routes return `{ "success": true, "data": ... }` or `{ "success": false, "er
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/live` | GET | Zero-I/O liveness probe (used by the container HEALTHCHECK) |
-| `/api/health` | GET | Provider connectivity — verifies Claude + OpenAI upstream access (parallel, shares the usage cache) |
-| `/api/usage/claude` | GET | Claude quota windows + per-model breakdown (30 s server-side cache) |
-| `/api/usage/openai` | GET | ChatGPT/Codex quota windows (30 s server-side cache) |
+| `/api/health` | GET | Provider connectivity — verifies Claude + OpenAI upstream access (parallel, shares the usage cache). Each provider entry is `{ configured, connected, error?, code? }` |
+| `/api/usage/claude` | GET | Claude quota windows + per-model breakdown + add-on credits (30 s server-side cache; `?fresh=1` bypasses it) |
+| `/api/usage/openai` | GET | ChatGPT/Codex quota windows + credit balance (30 s server-side cache; `?fresh=1` bypasses it) |
 | `/api/organizations/claude` | GET | List organizations for a session key |
 | `/api/credentials` | GET/POST/DELETE | Encrypted credential storage (mutations invalidate the usage caches) |
 | `/api/monitor/stats` | GET | Header stats (`?provider`, `?machine`) |
@@ -329,6 +346,8 @@ All routes return `{ "success": true, "data": ... }` or `{ "success": false, "er
 | `/api/analytics/files` | GET | Most-modified files and directories |
 | `/api/analytics/models` | GET | Per-model cost/token series |
 | `/api/analytics/insights` | GET | Heatmap, projects, streaks, explore-vs-modify |
+
+The usage routes report failures with a typed `error.code`: `MISSING_CREDENTIALS` (401, nothing configured), `AUTH_EXPIRED` (401, credentials rejected) or `FETCH_ERROR` (502, upstream failed or timed out after 10 s).
 
 Every `/api/analytics/*` route and the four monitor read routes above take the same optional `?provider=` and `?machine=` filters; omitting either leaves that axis unscoped.
 
@@ -367,6 +386,12 @@ Something rebuilt it for the wrong runtime. `npm rebuild better-sqlite3` restore
 
 **Hooks feel slow / events missing.**
 Verify the hub is up first: `curl http://127.0.0.1:3789/api/live`. If an old desktop build ever ran on this machine, delete its leftover port file — `rm "~/Library/Application Support/llm-usage-tracker/server-port"` — so the hook stops probing a port nothing listens on. The hook can be tested any time with `bash hooks/test-hook.sh`.
+
+**Claude card shows an error but keeps old numbers.**
+By design: a failed refresh shows the real error (`AUTH_EXPIRED`, `FETCH_ERROR`, …) over the last good data instead of resetting to "configure credentials". Hit Refresh to bypass the 30 s cache. If the upstream rejects the request outright, try overriding `CLAUDE_CODE_USER_AGENT` / `CLAUDE_WEB_USER_AGENT`.
+
+**Claude card has no prepaid balance.**
+The balance is only available through claude.ai, so it needs a session key saved in Settings; the Claude Code OAuth token alone covers quota windows and extra usage but not the prepaid balance.
 
 **Claude card says "Session key expired".**
 Grab a fresh `sessionKey` cookie from claude.ai (DevTools → Application → Cookies) and paste it in Settings. If Claude Code is installed and logged in, the Keychain OAuth path usually makes this unnecessary.
@@ -426,8 +451,9 @@ llm-usage-tracker/
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Next.js dev server (UI + API + Codex watcher) |
-| `npm test` | vitest suite (194 tests: schema, queries, purge, providers, codex ingest, claude transcripts, provider/machine filters, throttles, SSE, edge↔hub ingest contract) |
+| `npm test` | vitest suite (274 tests: schema, queries, purge, providers, codex ingest, claude transcripts, provider/machine filters, throttles, SSE, edge↔hub ingest contract) |
 | `npm run test:edge` | edge shipper suite (`node --test`, no dependencies to install) |
+| `npx tsc --noEmit` | Typecheck (CI runs lint, typecheck, both test suites and a build) |
 | `npm run build` | Production build (standalone output + static assets) |
 | `npm run db:export` | Consistent DB snapshot out of the Docker volume |
 | `docker compose up -d --build` | Rebuild + restart the canonical tracker |
