@@ -20,3 +20,23 @@ export function usageRetryDelay(
   const backoff = ~~((random() + 0.5) * (1 << Math.min(retryCount, 8))) * retryIntervalMs;
   return Math.min(backoff, REFRESH_INTERVALS.usage);
 }
+
+const pendingRetries = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Schedule `fn` after `delayMs`, keeping at most one pending retry per key.
+ *
+ * SWR starts a fresh retry chain for every failed non-deduped request, and a
+ * focus revalidation or manual Refresh issues one while an earlier chain's
+ * timer is still pending. Because usage retries never give up, those chains
+ * would otherwise stack — K focus events ≈ K upstream requests per minute.
+ */
+export function scheduleRetry(key: string, delayMs: number, fn: () => void): void {
+  const pending = pendingRetries.get(key);
+  if (pending !== undefined) clearTimeout(pending);
+  const timer = setTimeout(() => {
+    pendingRetries.delete(key);
+    fn();
+  }, delayMs);
+  pendingRetries.set(key, timer);
+}

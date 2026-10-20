@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { usageRetryDelay } from "@/lib/usage/retry-delay";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { scheduleRetry, usageRetryDelay } from "@/lib/usage/retry-delay";
 import { REFRESH_INTERVALS } from "@/lib/constants";
 
 // random() = 0.5 makes SWR's jitter factor exactly 1, so delays are deterministic
@@ -26,5 +26,51 @@ describe("usageRetryDelay", () => {
 
   it("defaults to SWR's 5 s retry interval", () => {
     expect(usageRetryDelay("FETCH_ERROR", 1, undefined, mid)).toBe(10_000);
+  });
+});
+
+describe("scheduleRetry", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a second schedule for the same key cancels the pending one", () => {
+    vi.useFakeTimers();
+    const first = vi.fn();
+    const second = vi.fn();
+
+    scheduleRetry("/api/usage/claude", 1_000, first);
+    scheduleRetry("/api/usage/claude", 1_000, second);
+    vi.advanceTimersByTime(1_000);
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("different keys run independent chains", () => {
+    vi.useFakeTimers();
+    const claude = vi.fn();
+    const openai = vi.fn();
+
+    scheduleRetry("/api/usage/claude", 1_000, claude);
+    scheduleRetry("/api/usage/openai", 1_000, openai);
+    vi.advanceTimersByTime(1_000);
+
+    expect(claude).toHaveBeenCalledTimes(1);
+    expect(openai).toHaveBeenCalledTimes(1);
+  });
+
+  it("a fired retry no longer blocks or gets cancelled by the next schedule", () => {
+    vi.useFakeTimers();
+    const first = vi.fn();
+    const next = vi.fn();
+
+    scheduleRetry("/api/usage/claude", 1_000, first);
+    vi.advanceTimersByTime(1_000);
+    scheduleRetry("/api/usage/claude", 1_000, next);
+    vi.advanceTimersByTime(1_000);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledTimes(1);
   });
 });

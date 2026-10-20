@@ -7,7 +7,7 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 ![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-node22--slim-2496ED?logo=docker&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-292%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-295%20passing-brightgreen)
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -394,7 +394,7 @@ By design: a failed refresh shows the real error (`AUTH_EXPIRED`, `FETCH_ERROR`,
 The balance is only available through claude.ai, so it needs a session key saved in Settings; the Claude Code OAuth token alone covers quota windows and extra usage but not the prepaid balance.
 
 **Claude card says "Claude Code sign-in expired".**
-The Keychain OAuth token has lapsed and there's no session key to fall back on. Run `claude` in a terminal to refresh the sign-in; the card picks it up within a minute, keeping the last numbers until then.
+The Keychain OAuth token has lapsed and there's no session key to fall back on. Run `claude` in a terminal to refresh the sign-in; the card picks it up within a minute or two, keeping the last numbers until then.
 
 **Claude card says "Session key expired".**
 Grab a fresh `sessionKey` cookie from claude.ai (DevTools → Application → Cookies) and paste it in Settings. If Claude Code is installed and logged in, the Keychain OAuth path usually makes this unnecessary.
@@ -454,7 +454,7 @@ llm-usage-tracker/
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Next.js dev server (UI + API + Codex watcher) |
-| `npm test` | vitest suite (292 tests: schema, queries, purge, providers, codex ingest, claude transcripts, provider/machine filters, throttles, SSE, edge↔hub ingest contract) |
+| `npm test` | vitest suite (295 tests: schema, queries, purge, providers, codex ingest, claude transcripts, provider/machine filters, throttles, SSE, edge↔hub ingest contract) |
 | `npm run test:edge` | edge shipper suite (`node --test`, no dependencies to install) |
 | `npx tsc --noEmit` | Typecheck (CI runs lint, typecheck, both test suites and a build) |
 | `npm run build` | Production build (standalone output + static assets) |

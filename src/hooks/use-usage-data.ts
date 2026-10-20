@@ -8,7 +8,7 @@ import type {
   ProviderHealth,
 } from "@/types";
 import { REFRESH_INTERVALS } from "@/lib/constants";
-import { usageRetryDelay } from "@/lib/usage/retry-delay";
+import { scheduleRetry, usageRetryDelay } from "@/lib/usage/retry-delay";
 
 const CLAUDE_USAGE_KEY = "/api/usage/claude";
 const OPENAI_USAGE_KEY = "/api/usage/openai";
@@ -41,10 +41,11 @@ async function fetcher<T>(url: string): Promise<T> {
 }
 
 // SWR stops refreshInterval polling while an error is cached, so retries are
-// what keep a failed card polling (see usageRetryDelay for the schedule).
+// what keep a failed card polling (see usageRetryDelay for the schedule, and
+// scheduleRetry for why there's only ever one pending retry per key).
 const onErrorRetry: SWRConfiguration["onErrorRetry"] = (
   error: UsageFetchError,
-  _key,
+  key,
   config,
   revalidate,
   { retryCount }
@@ -52,7 +53,8 @@ const onErrorRetry: SWRConfiguration["onErrorRetry"] = (
   const max = config.errorRetryCount;
   if (max !== undefined && retryCount > max) return;
   const delay = usageRetryDelay(error.code, retryCount, config.errorRetryInterval);
-  setTimeout(revalidate, delay, { retryCount });
+  // One chain per key: a newer failure supersedes any retry still pending
+  scheduleRetry(key, delay, () => revalidate({ retryCount }));
 };
 
 const usageConfig: SWRConfiguration = {
