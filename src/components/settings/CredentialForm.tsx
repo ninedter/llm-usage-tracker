@@ -28,7 +28,7 @@ const FIELD_CONFIG: Partial<
       key: "sessionKey",
       label: "Session Key",
       placeholder: "sk-ant-sid02-...",
-      help: 'From claude.ai browser cookies. Open DevTools > Application > Cookies > "sessionKey". The Organization ID will be fetched automatically.',
+      help: 'Optional if you\'re signed in to Claude Code on this Mac; needed for the prepaid balance, and in the Docker hub (no Keychain there). From claude.ai browser cookies: DevTools > Application > Cookies > "sessionKey". The Organization ID will be fetched automatically.',
     },
   ],
 };

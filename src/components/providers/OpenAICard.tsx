@@ -4,13 +4,21 @@ import { useOpenAIUsage } from "@/hooks/use-usage-data";
 import { PROVIDER_INFO } from "@/lib/constants";
 import { ProviderCard } from "@/components/dashboard/ProviderCard";
 import { UsageBar } from "@/components/dashboard/UsageBar";
+import { CreditSection } from "@/components/dashboard/CreditSection";
 import { CardSkeleton } from "@/components/ui/Skeleton";
+import { openaiCreditSummary } from "@/lib/usage/credits";
 
-export function OpenAICard({ enabled }: { enabled: boolean }) {
-  const { data, error, isLoading } = useOpenAIUsage(enabled);
+export function OpenAICard() {
+  const { data, error, isLoading } = useOpenAIUsage();
   const info = PROVIDER_INFO.openai;
 
-  if (!enabled) {
+  // A retry in flight after an error is not a first load: keep the error UI up
+  if (isLoading && !data && !error) return <CardSkeleton />;
+
+  // Only a definitive "no credentials" answer earns the setup placeholder —
+  // even over stale data, so deleting credentials clears the card. Any other
+  // failure keeps whatever data we have and shows the error banner.
+  if (error?.code === "MISSING_CREDENTIALS") {
     return (
       <ProviderCard
         name={info.displayName}
@@ -26,14 +34,12 @@ export function OpenAICard({ enabled }: { enabled: boolean }) {
     );
   }
 
-  if (isLoading) return <CardSkeleton />;
-
   return (
     <ProviderCard
       name={info.displayName}
       color={info.color}
       icon={<OpenAIIcon />}
-      connected={!!data}
+      connected={!!data && !error}
       lastUpdated={data?.lastUpdated}
       error={error?.message}
     >
@@ -61,6 +67,20 @@ export function OpenAICard({ enabled }: { enabled: boolean }) {
                 />
               ))}
             </div>
+          )}
+
+          {(data.credits || data.creditsDepleted) && (
+            <CreditSection alert={data.creditsDepleted ? "Depleted" : undefined}>
+              <p
+                className={
+                  data.credits?.hasCredits
+                    ? "text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+                    : "text-sm text-zinc-500 dark:text-zinc-400"
+                }
+              >
+                {openaiCreditSummary(data) ?? "No credits"}
+              </p>
+            </CreditSection>
           )}
 
           {data.resetCreditsAvailable != null && (

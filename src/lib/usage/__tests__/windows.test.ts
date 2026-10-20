@@ -18,6 +18,8 @@ const claude = (session: number, weekly: number): ClaudeUsageData => ({
   session: win(session),
   weekly: win(weekly),
   modelBreakdown: [],
+  extraUsage: null,
+  prepaidBalance: null,
   lastUpdated: "",
 });
 
@@ -27,6 +29,8 @@ const openai = (windows: OpenAIUsageData["windows"]): OpenAIUsageData => ({
   featureLimits: [],
   resetCreditsAvailable: null,
   resetCredits: [],
+  credits: null,
+  creditsDepleted: false,
   lastUpdated: "",
 });
 

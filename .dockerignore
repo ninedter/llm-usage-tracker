@@ -23,3 +23,8 @@ hooks
 
 # edge shipper: runs on the machine, not inside the hub image
 edge
+
+# Tests never run in the image, and `next build` typechecks every .ts in the
+# context — edge-contract.test.ts imports edge/, which is excluded above
+**/__tests__
+**/*.test.ts
