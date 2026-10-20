@@ -10,14 +10,14 @@ export default function MonitorPage() {
   return (
     <div className="mx-auto flex h-[calc(100vh-2rem)] w-full flex-col px-4 pb-4">
       {/* Header — draggable for Electron window movement */}
-      <div className="titlebar-drag mb-4 flex flex-shrink-0 items-center justify-between pt-2">
+      <div className="titlebar-drag mb-4 flex flex-shrink-0 flex-wrap items-center justify-between gap-y-2 pt-2">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Agent Monitor</h1>
           <p className="mt-1 text-base text-zinc-500 dark:text-zinc-400">
             Real-time Claude Code and Codex agent activity.
           </p>
         </div>
-        <div className="titlebar-no-drag flex items-center gap-3">
+        <div className="titlebar-no-drag flex flex-wrap items-center gap-3 gap-y-2">
           <NavLinks current="/monitor" />
         </div>
       </div>
