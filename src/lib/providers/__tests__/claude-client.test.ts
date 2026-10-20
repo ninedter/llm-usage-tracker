@@ -28,6 +28,7 @@ const urls = () => fetchMock.mock.calls.map((c) => String(c[0]));
 
 beforeEach(() => {
   ClaudeClient.invalidateTokenCache();
+  ClaudeClient.resetCreditsBackoff();
   execMock.mockReset();
   Object.defineProperty(process, "platform", { value: "darwin" });
   fetchMock = vi.fn();
@@ -156,6 +157,101 @@ describe("ClaudeClient.fetchUsage", () => {
     fetchMock.mockResolvedValue(json({}, 401));
 
     await expect(new ClaudeClient(null).fetchUsage()).rejects.toBeInstanceOf(UpstreamAuthError);
+  });
+});
+
+describe("ClaudeClient expired session key", () => {
+  const creditCalls = () =>
+    urls().filter((u) => u.endsWith("/prepaid/credits") || u.endsWith("/overage_spend_limit"));
+
+  // OAuth works; claude.ai answers the credit endpoints with `creditStatus`
+  const oauthWithCredits = (creditStatus: number) => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/prepaid/credits") || url.endsWith("/overage_spend_limit")) {
+        return creditStatus === 200 ? json({ amount: 500 }) : json({}, creditStatus);
+      }
+      return json(USAGE);
+    });
+  };
+
+  it.each([401, 403])("credit endpoints %i -> usage resolves, flagged sessionKeyExpired", async (status) => {
+    oauthWithCredits(status);
+
+    const data = await new ClaudeClient(SESSION).fetchUsage();
+
+    expect(data.session.percentage).toBe(12);
+    expect(data.prepaidBalance).toBeNull();
+    expect(data.sessionKeyExpired).toBe(true);
+  });
+
+  it("a healthy session key is not flagged", async () => {
+    oauthWithCredits(200);
+    const data = await new ClaudeClient(SESSION).fetchUsage();
+    expect(data.sessionKeyExpired).toBe(false);
+  });
+
+  it("non-auth credit failures (404) are not an expired key", async () => {
+    oauthWithCredits(404);
+    const data = await new ClaudeClient(SESSION).fetchUsage();
+    expect(data.sessionKeyExpired).toBe(false);
+    await new ClaudeClient(SESSION).fetchUsage();
+    expect(creditCalls()).toHaveLength(4); // no backoff
+  });
+
+  it("a lone 403 beside a working endpoint is not an expired key", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/prepaid/credits")) return json({ amount: 500 });
+      if (url.endsWith("/overage_spend_limit")) return json({}, 403);
+      return json(USAGE);
+    });
+
+    const data = await new ClaudeClient(SESSION).fetchUsage();
+
+    expect(data.sessionKeyExpired).toBe(false);
+    expect(data.prepaidBalance).toEqual({ amount: 5, currency: "USD" });
+  });
+
+  it("skips the credit endpoints during the backoff window, then retries", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      oauthWithCredits(401);
+      await new ClaudeClient(SESSION).fetchUsage();
+      expect(creditCalls()).toHaveLength(2);
+
+      vi.advanceTimersByTime(14 * 60_000);
+      const during = await new ClaudeClient(SESSION).fetchUsage();
+      expect(creditCalls()).toHaveLength(2); // skipped
+      expect(during.sessionKeyExpired).toBe(true); // still reported
+
+      vi.advanceTimersByTime(2 * 60_000);
+      oauthWithCredits(200);
+      const after = await new ClaudeClient(SESSION).fetchUsage();
+      expect(creditCalls()).toHaveLength(4);
+      expect(after.sessionKeyExpired).toBe(false);
+      expect(after.prepaidBalance).toEqual({ amount: 5, currency: "USD" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a newly saved session key bypasses the backoff", async () => {
+    oauthWithCredits(401);
+    await new ClaudeClient(SESSION).fetchUsage();
+
+    oauthWithCredits(200);
+    const data = await new ClaudeClient({ ...SESSION, sessionKey: "sk-session-new" }).fetchUsage();
+
+    expect(creditCalls()).toHaveLength(4);
+    expect(data.sessionKeyExpired).toBe(false);
+  });
+
+  it("OAuth-only (no session) is never flagged", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockResolvedValue(json(USAGE));
+    const data = await new ClaudeClient(null).fetchUsage();
+    expect(data.sessionKeyExpired).toBe(false);
   });
 });
 

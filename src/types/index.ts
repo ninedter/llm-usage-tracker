@@ -61,6 +61,9 @@ export interface ClaudeUsageData {
   modelBreakdown: ModelUsage[];
   extraUsage: ClaudeExtraUsage | null;
   prepaidBalance: MoneyAmount | null;
+  // Usage came through (e.g. via OAuth) but claude.ai rejected the saved
+  // session key, so prepaid balance / spend-limit data is unavailable
+  sessionKeyExpired: boolean;
   lastUpdated: string;
 }
 
@@ -115,6 +118,8 @@ export interface ProviderHealthEntry {
   configured: boolean;
   connected: boolean;
   error?: string;
+  // Connected, but something secondary is degraded (e.g. expired session key)
+  warning?: string;
   code?: "MISSING_CREDENTIALS" | "AUTH_EXPIRED" | "FETCH_ERROR";
 }
 

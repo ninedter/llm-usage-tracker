@@ -20,6 +20,7 @@ const claude = (session: number, weekly: number): ClaudeUsageData => ({
   modelBreakdown: [],
   extraUsage: null,
   prepaidBalance: null,
+  sessionKeyExpired: false,
   lastUpdated: "",
 });
 

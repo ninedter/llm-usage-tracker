@@ -36,6 +36,11 @@ export const REFRESH_INTERVALS = {
 // Hard cap on every upstream (claude.ai / api.anthropic.com / chatgpt.com) request
 export const UPSTREAM_TIMEOUT_MS = 10_000;
 
+// Shown on the Claude card and in Settings when usage works (via OAuth) but
+// claude.ai rejects the saved session key the credit endpoints need
+export const CLAUDE_SESSION_KEY_EXPIRED_HINT =
+  "claude.ai session key expired: prepaid balance unavailable. Update it in Settings.";
+
 export const ARCHIVE_AFTER_MS = 30 * 60 * 1000; // 30 minutes
 
 export function getUsageLevel(percentage: number) {

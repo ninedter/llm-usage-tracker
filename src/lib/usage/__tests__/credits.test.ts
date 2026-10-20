@@ -34,6 +34,7 @@ const claude = (over: Partial<ClaudeUsageData>): ClaudeUsageData => ({
   modelBreakdown: [],
   extraUsage: null,
   prepaidBalance: null,
+  sessionKeyExpired: false,
   lastUpdated: "",
   ...over,
 });

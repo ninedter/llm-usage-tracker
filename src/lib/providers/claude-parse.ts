@@ -121,7 +121,11 @@ export function parsePrepaid(raw: ClaudePrepaidRaw | null | undefined): MoneyAmo
 
 export function parseClaudeUsage(
   usage: ClaudeUsageResponse,
-  extras?: { prepaid?: ClaudePrepaidRaw | null; spendLimit?: ClaudeSpendLimitRaw | null }
+  extras?: {
+    prepaid?: ClaudePrepaidRaw | null;
+    spendLimit?: ClaudeSpendLimitRaw | null;
+    sessionKeyExpired?: boolean;
+  }
 ): ClaudeUsageData {
   // New format: five_hour.utilization (0-100), seven_day.utilization (0-100)
   const fiveHourUtil = usage.five_hour?.utilization;
@@ -203,6 +207,7 @@ export function parseClaudeUsage(
     modelBreakdown,
     extraUsage: parseExtraUsage(usage.extra_usage, extras?.spendLimit),
     prepaidBalance: parsePrepaid(extras?.prepaid),
+    sessionKeyExpired: extras?.sessionKeyExpired ?? false,
     lastUpdated: new Date().toISOString(),
   };
 }

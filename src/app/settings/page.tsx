@@ -21,7 +21,9 @@ export default function SettingsPage() {
   const { fontSize, setFontSize, fontSizeOptions } = useMonitorSettings();
 
   return (
-    <div className="mx-auto max-w-3xl px-4 pb-8">
+    // w-full: as an auto-margin flex item this would otherwise size to its
+    // content's min-width and overflow phones (the other pages do the same)
+    <div className="mx-auto w-full max-w-3xl px-4 pb-8">
       {/* Header */}
       <div className="titlebar-drag mb-6 flex flex-wrap items-center justify-between gap-y-2 pt-2">
         <div>
@@ -49,7 +51,8 @@ export default function SettingsPage() {
         </p>
 
         <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-3">
+          {/* Wraps on phones: label + four segments don't fit in 375px */}
+          <div className="flex flex-wrap items-center gap-3">
             <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400 w-20 flex-shrink-0">
               Font Size
             </label>
@@ -85,7 +88,7 @@ export default function SettingsPage() {
                   main
                 </span>
               </div>
-              <p className={`mt-1 ${FONT_PREVIEW[fontSize]} text-zinc-500`}>
+              <p className={`mt-1 wrap-anywhere ${FONT_PREVIEW[fontSize]} text-zinc-500`}>
                 <span className="text-blue-400">Read</span>
                 <span className="text-zinc-600"> — src/components/monitor/AgentCard.tsx</span>
               </p>
