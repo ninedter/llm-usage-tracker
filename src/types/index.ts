@@ -82,6 +82,12 @@ export interface OpenAIResetCredit {
   expiresAt: string | null;
 }
 
+export interface OpenAICredits {
+  hasCredits: boolean;
+  unlimited: boolean;
+  balance: number | null; // credits; null when absent, non-finite, or <= 0
+}
+
 export interface OpenAIUsageData {
   planType: string;
   windows: OpenAIRateWindow[];
@@ -89,6 +95,8 @@ export interface OpenAIUsageData {
   // Rate-limit reset credits (null when the plan doesn't expose them)
   resetCreditsAvailable: number | null;
   resetCredits: OpenAIResetCredit[];
+  credits: OpenAICredits | null; // null when wham/usage has no credits object
+  creditsDepleted: boolean; // rate_limit_reached_type ends with "credits_depleted"
   lastUpdated: string;
 }
 

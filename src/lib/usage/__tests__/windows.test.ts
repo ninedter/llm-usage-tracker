@@ -29,6 +29,8 @@ const openai = (windows: OpenAIUsageData["windows"]): OpenAIUsageData => ({
   featureLimits: [],
   resetCreditsAvailable: null,
   resetCredits: [],
+  credits: null,
+  creditsDepleted: false,
   lastUpdated: "",
 });
 
