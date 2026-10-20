@@ -391,7 +391,7 @@ Verify the hub is up first: `curl http://127.0.0.1:3789/api/live`. If an old des
 By design: a failed refresh shows the real error (`AUTH_EXPIRED`, `FETCH_ERROR`, …) over the last good data instead of resetting to "configure credentials". Hit Refresh to bypass the 30 s cache. If the upstream rejects the request outright, try overriding `CLAUDE_CODE_USER_AGENT` / `CLAUDE_WEB_USER_AGENT`.
 
 **Claude card has no prepaid balance.**
-The balance is only available through claude.ai, so it needs a session key saved in Settings; the Claude Code OAuth token alone covers quota windows and extra usage but not the prepaid balance.
+The balance is only available through claude.ai, so it needs a session key saved in Settings; the Claude Code OAuth token alone covers quota windows and extra usage but not the prepaid balance. If a saved key has expired while OAuth still works, the card and Settings say "session key expired: prepaid balance unavailable"; the tracker then skips the claude.ai credit endpoints for 15 minutes rather than retrying on every poll (saving a new key retries immediately).
 
 **Claude card says "Claude Code sign-in expired".**
 The Keychain OAuth token has lapsed and there's no session key to fall back on. Run `claude` in a terminal to refresh the sign-in; the card picks it up within a minute or two, keeping the last numbers until then.
