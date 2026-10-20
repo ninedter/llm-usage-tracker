@@ -9,30 +9,10 @@ import sys
 import threading
 
 
-PORT_FILE = os.path.expanduser(
-    "~/Library/Application Support/llm-usage-tracker/server-port"
-)
-
-
 def read_candidate_ports():
-    """Yield (port, from_file) pairs. from_file marks the server-port entry:
-    it is the least trustworthy candidate — Electron killed with SIGKILL used
-    to leave it pointing at an orphaned server that accepts TCP but never
-    answers HTTP, so it gets a shorter timeout and stale-file cleanup below."""
-    ports = []
-    try:
-        with open(PORT_FILE) as f:
-            ports.append((int(f.read().strip()), True))
-    except (OSError, ValueError):
-        pass
-    ports.append((int(os.environ.get("DOCKER_MONITOR_PORT", "3789")), False))
-    ports.append((3000, False))
-    seen, out = set(), []
-    for p, from_file in ports:
-        if p not in seen:
-            seen.add(p)
-            out.append((p, from_file))
-    return out
+    """Local tracker ports to try: the Docker hub, then a `next dev` server."""
+    ports = [int(os.environ.get("DOCKER_MONITOR_PORT", "3789")), 3000]
+    return list(dict.fromkeys(ports))
 
 
 def post_json(host, port, path, body, timeout, use_https=False):
@@ -199,26 +179,12 @@ def main():
                 pass
         return
 
-    for port, from_file in read_candidate_ports():
+    for port in read_candidate_ports():
         # Post to EVERY listening instance — otherwise whichever instance is
         # open steals the events and the other's history has gaps. A refused
         # connection fails in ~1ms; only a listening-but-slow server costs time.
-        # The port-file entry gets a much smaller budget: a healthy embedded
-        # server on localhost answers in ~10ms, while a wedged orphan (stale
-        # file after an unclean Electron exit) eats the whole timeout on
-        # every single hook event.
         try:
-            post_json("127.0.0.1", port, "/api/monitor/events", body,
-                      0.75 if from_file else 3)
-        except ConnectionRefusedError:
-            if from_file:
-                # Nothing listens there at all. The file is definitely stale —
-                # Electron writes it only after its server passes /api/live —
-                # so remove it instead of paying this path on every event.
-                try:
-                    os.unlink(PORT_FILE)
-                except OSError:
-                    pass
+            post_json("127.0.0.1", port, "/api/monitor/events", body, 3)
         except Exception:
             pass
 

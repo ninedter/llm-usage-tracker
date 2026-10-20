@@ -366,7 +366,7 @@ You bind-mounted the DB directory on macOS. WAL keeps its wal-index in an mmap'd
 Something rebuilt it for the wrong runtime. `npm rebuild better-sqlite3` restores the one true state (system-Node ABI), which is what tests, dev and the container all use.
 
 **Hooks feel slow / events missing.**
-Verify the hub is up first: `curl http://127.0.0.1:3789/api/live`. If an old desktop build ever ran on this machine, delete its leftover port file — `rm "~/Library/Application Support/llm-usage-tracker/server-port"` — so the hook stops probing a port nothing listens on. The hook can be tested any time with `bash hooks/test-hook.sh`.
+Verify the hub is up first: `curl http://127.0.0.1:3789/api/live`. The hook can be tested any time with `bash hooks/test-hook.sh`.
 
 **Claude card says "Session key expired".**
 Grab a fresh `sessionKey` cookie from claude.ai (DevTools → Application → Cookies) and paste it in Settings. If Claude Code is installed and logged in, the Keychain OAuth path usually makes this unnecessary.

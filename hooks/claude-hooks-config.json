@@ -1,5 +1,5 @@
 {
-  "_comment": "Add these hooks to ~/.claude/settings.json. For local use no extra variables are needed — the hook auto-discovers the tracker on :3789 (Docker), :3000, and the Electron port file. For a remote hub, run the edge shipper on this machine and use hooks_edge (see edge/README.md). For cloud/tunnel sessions, set MONITOR_URL instead.",
+  "_comment": "Add these hooks to ~/.claude/settings.json. For local use no extra variables are needed — the hook auto-discovers the tracker on :3789 (Docker) and :3000 (dev server). For a remote hub, run the edge shipper on this machine and use hooks_edge (see edge/README.md). For cloud/tunnel sessions, set MONITOR_URL instead.",
 
   "hooks_local": {
     "PreToolUse": [
