@@ -57,7 +57,7 @@ Both providers side by side: Claude's 5-hour session window, 7-day window, and p
 
 **Add-on credits.** Each card can show what happens beyond the included quota:
 
-- **Claude — "Add-on credits" section.** The *prepaid balance*, plus *this month's extra usage*: spent, monthly cap, remaining and % used. It reads "no monthly cap" when uncapped and "Extra usage is off" when disabled, and an **Out of credits** pill appears when extra usage has hit its monthly spend limit (claude.ai's out-of-credits flag, or 100% of the cap) — it reflects the extra-usage cap, not the prepaid balance. The prepaid balance is only exposed by claude.ai, so it needs a claude.ai session key saved in Settings; extra usage works with Claude Code's OAuth token alone.
+- **Claude — "Add-on credits" section.** The *prepaid balance*, plus *this month's extra usage*: spent, monthly cap, remaining and % used. It reads "no monthly cap" when uncapped and "Extra usage is off" when disabled, and an **Out of credits** pill appears when enabled extra usage has hit its monthly spend limit (claude.ai's spend-limit-reached / out-of-credits flags, or 100% of the cap) — it reflects the extra-usage cap, not the prepaid balance. The prepaid balance is only exposed by claude.ai, so it needs a claude.ai session key saved in Settings; extra usage works with Claude Code's OAuth token alone.
 - **OpenAI — Codex credits.** Read from the `credits` field of the Codex usage endpoint: "N credits", "Unlimited", or "Credits available", with a **Depleted** pill when the workspace's credits are depleted or its overage limit is reached.
 - **Monitor strip.** The same figures appear as a compact credit readout on each provider row (hidden on phones).
 

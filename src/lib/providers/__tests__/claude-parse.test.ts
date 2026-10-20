@@ -91,6 +91,68 @@ describe("parseExtraUsage", () => {
     expect(r).toMatchObject({ monthlyLimit: null, used: 0 });
   });
 
+  it("enabled + spend limit reached -> out of credits", () => {
+    const r = parseExtraUsage(
+      { is_enabled: true, spend_limit_reached: true },
+      { monthly_credit_limit: 5000, used_credits: 5000 }
+    );
+    expect(r!.outOfCredits).toBe(true);
+  });
+
+  it("extra_usage.spend_limit_reached wins over the spend-limit flag", () => {
+    const r = parseExtraUsage(
+      { is_enabled: true, spend_limit_reached: false },
+      { monthly_credit_limit: 5000, used_credits: 100, out_of_credits: true }
+    );
+    expect(r!.outOfCredits).toBe(false);
+  });
+
+  // Live shape (Oct 2026): extra usage switched off, nothing used, yet
+  // overage_spend_limit says out_of_credits with a self-selected-limit reason
+  it("switched-off extra usage is never out of credits", () => {
+    const r = parseExtraUsage(
+      {
+        is_enabled: false,
+        monthly_limit: null,
+        used_credits: null,
+        utilization: null,
+        currency: null,
+        decimal_places: null,
+        spend_limit_reached: false,
+      },
+      {
+        is_enabled: false,
+        monthly_credit_limit: 5000,
+        used_credits: 0,
+        currency: "USD",
+        out_of_credits: true,
+        cap: { money: null, credits: { amount_minor: 5000, exponent: 2 } },
+      }
+    );
+    expect(r).toMatchObject({
+      enabled: false,
+      outOfCredits: false,
+      monthlyLimit: 50,
+      used: 0,
+      currency: "USD",
+    });
+  });
+
+  it("honors decimal_places, then the cap exponent, over the cents default", () => {
+    expect(parseExtraUsage({ is_enabled: true, used_credits: 1234, decimal_places: 3 })!.used).toBe(1.234);
+    expect(
+      parseExtraUsage(undefined, {
+        is_enabled: true,
+        monthly_credit_limit: 500,
+        cap: { credits: { amount_minor: 500, exponent: 0 } },
+      })!.monthlyLimit
+    ).toBe(500);
+  });
+
+  it("ignores an unusable exponent", () => {
+    expect(parseExtraUsage({ is_enabled: true, used_credits: 250, decimal_places: -1 })!.used).toBe(2.5);
+  });
+
   it("returns null with no extra usage data", () => {
     expect(parseExtraUsage(undefined, null)).toBeNull();
   });
@@ -114,6 +176,21 @@ describe("parsePrepaid", () => {
       amount: 12.34,
       currency: "USD",
     });
+  });
+
+  // Live shape (Oct 2026): `amount` mirrors balance.credits.amount_minor
+  it("parses the live prepaid shape", () => {
+    expect(
+      parsePrepaid({
+        amount: 1234,
+        currency: "USD",
+        balance: { money: null, credits: { amount_minor: 1234, exponent: 2 } },
+      })
+    ).toEqual({ amount: 12.34, currency: "USD" });
+  });
+
+  it("keeps a zero balance (an account with no prepaid credit)", () => {
+    expect(parsePrepaid({ amount: 0, currency: "USD" })).toEqual({ amount: 0, currency: "USD" });
   });
 
   it("defaults currency to USD", () => {

@@ -3,11 +3,12 @@ import type { ClaudeUsageData, OpenAIUsageData } from "@/types";
 
 /**
  * One-line add-on credit summary for compact views (the Monitor strip).
- * Prepaid balance wins because it's real money already on the account;
- * capped extra usage shows headroom; uncapped extra usage can only show spend.
+ * A positive prepaid balance wins because it's real money already on the
+ * account (an empty one, the common case, would only hide the extra-usage
+ * line); capped extra usage shows headroom; uncapped can only show spend.
  */
 export function claudeCreditSummary(d: ClaudeUsageData): string | null {
-  if (d.prepaidBalance) {
+  if (d.prepaidBalance && d.prepaidBalance.amount > 0) {
     return `${formatMoney(d.prepaidBalance.amount, d.prepaidBalance.currency)} left`;
   }
   const x = d.extraUsage;
