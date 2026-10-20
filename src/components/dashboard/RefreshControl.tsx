@@ -1,18 +1,14 @@
 "use client";
 
-import { mutate } from "swr";
 import { useState } from "react";
+import { refreshUsage } from "@/hooks/use-usage-data";
 
 export function RefreshControl() {
   const [refreshing, setRefreshing] = useState(false);
 
   async function handleRefresh() {
     setRefreshing(true);
-    await Promise.all([
-      mutate("/api/usage/claude"),
-      mutate("/api/usage/openai"),
-      mutate("/api/health"),
-    ]);
+    await refreshUsage();
     // Small delay for visual feedback
     setTimeout(() => setRefreshing(false), 500);
   }

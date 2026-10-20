@@ -29,21 +29,31 @@ export function ProviderStatus() {
           const health = data[p];
           const info = PROVIDER_INFO[p];
           return (
-            <div key={p} className="flex items-center justify-between">
-              <span className="text-sm text-zinc-700 dark:text-zinc-300">
+            <div key={p} className="flex items-center justify-between gap-4">
+              <span className="flex-shrink-0 text-sm text-zinc-700 dark:text-zinc-300">
                 {info.displayName}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 items-center gap-2">
                 <span
-                  className={`inline-block h-2 w-2 rounded-full ${
-                    health.connected ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"
+                  className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${
+                    health.connected
+                      ? "bg-emerald-500"
+                      : health.configured
+                        ? "bg-amber-500"
+                        : "bg-zinc-300 dark:bg-zinc-600"
                   }`}
                 />
-                <span className="text-xs text-zinc-500">
-                  {health.connected
-                    ? "Connected"
-                    : health.error || "Not configured"}
-                </span>
+                {health.connected ? (
+                  <span className="text-xs text-zinc-500">Connected</span>
+                ) : health.configured ? (
+                  // Credentials exist but the upstream call failed (expired
+                  // token, outage) — distinct from never having set it up
+                  <span className="break-words text-right text-xs text-amber-600 dark:text-amber-400">
+                    {health.error || "Connection failed"}
+                  </span>
+                ) : (
+                  <span className="text-xs text-zinc-500">Not configured</span>
+                )}
               </div>
             </div>
           );

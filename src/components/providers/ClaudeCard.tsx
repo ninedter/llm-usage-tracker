@@ -4,13 +4,21 @@ import { useClaudeUsage } from "@/hooks/use-usage-data";
 import { PROVIDER_INFO } from "@/lib/constants";
 import { ProviderCard } from "@/components/dashboard/ProviderCard";
 import { UsageBar } from "@/components/dashboard/UsageBar";
+import { UsageStat } from "@/components/dashboard/UsageStat";
+import { CreditSection } from "@/components/dashboard/CreditSection";
 import { CardSkeleton } from "@/components/ui/Skeleton";
+import { formatMoney } from "@/lib/format";
+import type { ClaudeExtraUsage, MoneyAmount } from "@/types";
 
-export function ClaudeCard({ enabled }: { enabled: boolean }) {
-  const { data, error, isLoading } = useClaudeUsage(enabled);
+export function ClaudeCard() {
+  const { data, error, isLoading } = useClaudeUsage();
   const info = PROVIDER_INFO.claude;
 
-  if (!enabled) {
+  if (isLoading && !data) return <CardSkeleton />;
+
+  // Only a definitive "no credentials" answer earns the setup placeholder;
+  // any other failure keeps whatever data we have and shows the error banner
+  if (!data && error?.code === "MISSING_CREDENTIALS") {
     return (
       <ProviderCard
         name={info.displayName}
@@ -24,8 +32,6 @@ export function ClaudeCard({ enabled }: { enabled: boolean }) {
       </ProviderCard>
     );
   }
-
-  if (isLoading) return <CardSkeleton />;
 
   return (
     <ProviderCard
@@ -68,12 +74,62 @@ export function ClaudeCard({ enabled }: { enabled: boolean }) {
             </div>
           )}
 
+          {(data.extraUsage || data.prepaidBalance) && (
+            <ClaudeCredits extraUsage={data.extraUsage} prepaidBalance={data.prepaidBalance} />
+          )}
+
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
             Combined usage across claude.ai, Claude Code, and Claude Desktop.
           </p>
         </>
       )}
     </ProviderCard>
+  );
+}
+
+function ClaudeCredits({
+  extraUsage: x,
+  prepaidBalance,
+}: {
+  extraUsage: ClaudeExtraUsage | null;
+  prepaidBalance: MoneyAmount | null;
+}) {
+  return (
+    <CreditSection alert={x?.outOfCredits ? "Out of credits" : undefined}>
+      {prepaidBalance && (
+        <UsageStat
+          label="Prepaid balance"
+          value={formatMoney(prepaidBalance.amount, prepaidBalance.currency)}
+        />
+      )}
+
+      {x &&
+        (!x.enabled ? (
+          <p className="text-xs text-zinc-400 dark:text-zinc-500">Extra usage is off</p>
+        ) : x.monthlyLimit != null ? (
+          <div className="space-y-1">
+            <UsageBar
+              label="Extra usage this month"
+              percentage={x.percentage ?? 0}
+              level={x.level}
+              used={formatMoney(x.used, x.currency)}
+              limit={formatMoney(x.monthlyLimit, x.currency)}
+            />
+            {x.remaining != null && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {formatMoney(x.remaining, x.currency)} left
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+              {formatMoney(x.used, x.currency)}
+            </span>{" "}
+            spent this month · no monthly cap
+          </p>
+        ))}
+    </CreditSection>
   );
 }
 

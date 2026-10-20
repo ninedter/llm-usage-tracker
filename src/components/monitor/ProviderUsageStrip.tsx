@@ -1,7 +1,8 @@
 "use client";
 
-import { useClaudeUsage, useHealth, useOpenAIUsage } from "@/hooks/use-usage-data";
+import { useClaudeUsage, useOpenAIUsage } from "@/hooks/use-usage-data";
 import { PROVIDER_INFO } from "@/lib/constants";
+import { claudeCreditSummary, openaiCreditSummary } from "@/lib/usage/credits";
 import {
   claudeShortestWindow,
   openaiShortestWindow,
@@ -19,52 +20,77 @@ const BAR_COLORS: Record<UsageLevel, string> = {
  * Live quota for both providers at a glance — each provider's *shortest* reset
  * window only (Claude's 5h, OpenAI's 7d today). The window is chosen
  * dynamically in @/lib/usage/windows, so this follows the provider if their
- * limits change.
+ * limits change. Add-on credit balances ride along in a right-hand column.
  */
 export function ProviderUsageStrip() {
-  const { data: health } = useHealth();
-  const claudeConnected = !!health?.claude.connected;
-  const openaiConnected = !!health?.openai?.connected;
+  const { data: claude } = useClaudeUsage();
+  const { data: openai } = useOpenAIUsage();
 
-  const { data: claude } = useClaudeUsage(claudeConnected);
-  const { data: openai } = useOpenAIUsage(openaiConnected);
-
-  const rows: { id: ProviderId; window: StripWindow }[] = [];
+  const rows: StripRowData[] = [];
   const claudeWindow = claude ? claudeShortestWindow(claude) : null;
   const openaiWindow = openai ? openaiShortestWindow(openai) : null;
-  if (claudeWindow) rows.push({ id: "claude", window: claudeWindow });
-  if (openaiWindow) rows.push({ id: "openai", window: openaiWindow });
+  if (claude && claudeWindow) {
+    rows.push({
+      id: "claude",
+      window: claudeWindow,
+      credit: claudeCreditSummary(claude),
+      creditAlert: !!claude.extraUsage?.outOfCredits,
+    });
+  }
+  if (openai && openaiWindow) {
+    rows.push({
+      id: "openai",
+      window: openaiWindow,
+      credit: openaiCreditSummary(openai),
+      creditAlert: openai.creditsDepleted,
+    });
+  }
 
   if (rows.length === 0) return null;
+  // Only reserve the credit column when some provider has something to show,
+  // and keep it on every row so the bars stay aligned
+  const showCredits = rows.some((r) => r.credit);
 
   return (
     <div className="mb-4 flex-shrink-0 rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="grid gap-x-8 gap-y-2.5 lg:grid-cols-2">
-        {rows.map(({ id, window }) => (
-          <StripRow key={id} providerId={id} window={window} />
+        {rows.map((row) => (
+          <StripRow key={row.id} row={row} showCredits={showCredits} />
         ))}
       </div>
     </div>
   );
 }
 
-function StripRow({ providerId, window: w }: { providerId: ProviderId; window: StripWindow }) {
-  const info = PROVIDER_INFO[providerId];
+interface StripRowData {
+  id: ProviderId;
+  window: StripWindow;
+  credit: string | null;
+  creditAlert: boolean;
+}
+
+function StripRow({ row, showCredits }: { row: StripRowData; showCredits: boolean }) {
+  const { window: w } = row;
+  const info = PROVIDER_INFO[row.id];
   const pct = Math.min(100, Math.max(0, w.percentage));
 
+  // min-w-0: as a grid item the row would otherwise claim its fixed-width
+  // children's total as a minimum and overflow narrow screens
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex min-w-0 items-center gap-3">
       <span
         className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
         style={{ backgroundColor: info.color }}
       />
-      <span className="w-48 flex-shrink-0 truncate text-sm font-medium text-zinc-700 dark:text-zinc-300">
+      {/* Name gives way (truncates) before the bar does, so the credit
+          column fits in the two-column lg layout and on phones */}
+      <span className="w-48 min-w-0 truncate text-sm font-medium text-zinc-700 dark:text-zinc-300">
         {info.displayName}
       </span>
       <span className="w-7 flex-shrink-0 font-mono text-xs text-zinc-500 dark:text-zinc-400">
         {w.label}
       </span>
-      <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+      <div className="h-2.5 min-w-16 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
         <div
           className={`h-full rounded-full transition-all duration-500 ${BAR_COLORS[w.level]}`}
           style={{ width: `${pct}%` }}
@@ -76,6 +102,17 @@ function StripRow({ providerId, window: w }: { providerId: ProviderId; window: S
       <span className="hidden w-24 flex-shrink-0 text-right text-xs text-zinc-400 dark:text-zinc-500 xl:block">
         {w.resetTime ? formatReset(w.resetTime) : ""}
       </span>
+      {showCredits && (
+        <span
+          className={`hidden w-28 flex-shrink-0 truncate text-right text-xs tabular-nums sm:block ${
+            row.creditAlert
+              ? "text-red-600 dark:text-red-400"
+              : "text-zinc-500 dark:text-zinc-400"
+          }`}
+        >
+          {row.credit ?? ""}
+        </span>
+      )}
     </div>
   );
 }
