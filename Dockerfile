@@ -1,12 +1,9 @@
 # Headless runtime for the LLM Usage Tracker — runs the Next.js standalone
-# server without the Electron shell. See docs/superpowers/specs/2026-07-13-docker-deployment-design.md
+# server. See docs/superpowers/specs/2026-07-13-docker-deployment-design.md
 
 # --- Builder ---
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
-
-# Electron is a devDependency; its binary is useless in the image
-ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 
 COPY package.json package-lock.json ./
 # npm silently skips optional deps on fetch errors, but the native SWC binding

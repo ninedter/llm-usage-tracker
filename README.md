@@ -119,7 +119,7 @@ flowchart TB
     UP["claude.ai + api.anthropic.com<br/>chatgpt.com usage endpoints"] <-->|"30s shared TTL cache"| API
 ```
 
-- **One server, many browsers.** The container serves the UI and the API on `:3789`; you open it in any browser on the tailnet. There is nothing to install per client, and no second database to reconcile. (An `electron/` shell exists in the tree from an earlier iteration and is no longer part of the product — see [Development](#development).)
+- **One server, many browsers.** The container serves the UI and the API on `:3789`; you open it in any browser on the tailnet. There is nothing to install per client, and no second database to reconcile.
 - **Other machines are edges, not clients.** A second machine runs its own watchers and posts batches to `POST /api/ingest/v1` with its `machine_id`; it doesn't run its own UI or DB. The Monitor and Analytics pages then scope to All or to a single machine.
 - **The SQLite DB lives in a Docker named volume** (`llm-tracker-data`) — never a macOS bind mount (see [Troubleshooting](#troubleshooting) for the WAL/mmap story). Use `npm run db:export` for a host-side snapshot.
 
@@ -378,9 +378,6 @@ Delete `.next/cache` and rebuild (`docker compose up -d --build` for the contain
 
 ```
 llm-usage-tracker/
-├── electron/                    # retired desktop shell — not part of the product, not built
-│                                #   by `npm run build`, kept only so the legacy
-│                                #   `npm run electron:*` scripts still resolve
 ├── hooks/
 │   ├── agent-monitor-hook.sh    # thin wrapper (keeps ~/.claude/settings.json stable)
 │   ├── agent-monitor-hook.py    # the actual hook: parse → discover ports → POST (one process)
@@ -418,7 +415,7 @@ llm-usage-tracker/
 ├── Dockerfile                   # multi-stage; standalone output; HEALTHCHECK /api/live
 ├── docker-compose.yml           # :3789, named volume, TZ/INGEST_TOKEN/NEXT_PUBLIC_HUB_URL passthrough
 ├── docker-compose.local-watchers.yml # overlay: also watch this host's ~/.codex + ~/.claude/projects
-└── package.json                 # scripts + deps (the electron-builder block is legacy)
+└── package.json                 # scripts + deps
 ```
 
 ## Development
@@ -432,8 +429,6 @@ llm-usage-tracker/
 | `npm run db:export` | Consistent DB snapshot out of the Docker volume |
 | `docker compose up -d --build` | Rebuild + restart the canonical tracker |
 | `bash hooks/test-hook.sh` | Fire one synthetic event of each hook type |
-
-The `electron:*` scripts and the `electron/` directory are a retired path: the product is the container plus a browser. They are left in place so an existing checkout keeps resolving, and nothing in `npm run build`, `npm test` or the Docker image depends on them.
 
 Style: TypeScript strict throughout; Tailwind (dark zinc theme); raw SQL with prepared statements (no ORM); DB functions synchronous by design (`better-sqlite3`); API responses always `{ success, data | error }`.
 
