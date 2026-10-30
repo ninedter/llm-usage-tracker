@@ -7,7 +7,7 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 ![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-node22--slim-2496ED?logo=docker&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-194%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-229%20passing-brightgreen)
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -35,7 +35,7 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 
 ## What it does
 
-**Quota monitoring.** Reads your real subscription usage straight from the providers: Claude's 5-hour and 7-day windows (with per-model breakdown, e.g. a scoped Fable/Opus limit) via your claude.ai session or Claude Code's OAuth token, and ChatGPT/Codex rate-limit windows via your Codex CLI login. No API keys are spent to do this — it reads the same usage endpoints the official apps use.
+**Quota monitoring.** Reads your real subscription usage straight from the providers: Claude's account-specific session, weekly, and model limits via your claude.ai session or Claude Code's OAuth token, and ChatGPT/Codex rate-limit windows via your Codex CLI login. No API keys are spent to do this — it reads the same usage endpoints the official apps use.
 
 **Agent activity tracking.** A tiny hook script forwards every Claude Code lifecycle event (all 7 hook types) to the tracker, and a built-in watcher tails Codex CLI rollout logs. Every session, agent, subagent, tool call, and touched file lands in a local SQLite database and streams live into the UI over SSE.
 
@@ -51,7 +51,9 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 
 ### Dashboard — quota at a glance
 
-Both providers side by side: Claude's 5-hour session window, 7-day window, and per-model scoped limits; OpenAI's 7-day window, per-feature limits, and available rate-limit resets. Cards auto-refresh every 60 s and can be refreshed manually.
+Both providers side by side: Claude's reported quota windows and per-model scoped limits; OpenAI's rate-limit windows, per-feature limits, and available rate-limit resets. Cards auto-refresh every 60 s and can be refreshed manually.
+
+Claude's graphs follow the limits returned for the connected account. [Verified Ultra accounts](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan) have no five-hour limit, so the card shows weekly usage and the monitor strip switches to `7d`. Accounts that still have a session limit, including Ultra accounts awaiting verification, retain the five-hour graph. Missing limits are hidden rather than shown as 0%. Available account metadata supplies the plan label, including the renamed Max 5x → Max and Max 20x → Ultra tiers; the label never overrides an account's reported limits.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 

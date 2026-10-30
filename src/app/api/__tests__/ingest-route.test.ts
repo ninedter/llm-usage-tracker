@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { NextRequest } from "next/server";
+import { MAX_BATCH_SIZE } from "@/lib/monitor-ingest";
 
 // getDb() reads LLM_DATA_DIR lazily on its first call, so pointing it at an
 // isolated temp dir before importing the routes keeps this suite off the real
@@ -122,7 +123,7 @@ describe("POST /api/ingest/v1 — validation", () => {
   });
 
   it("400s past the batch cap without writing anything", async () => {
-    const events = Array.from({ length: ingest.MAX_BATCH_SIZE + 1 }, (_, i) => event({ source_id: `s-${i}` }));
+    const events = Array.from({ length: MAX_BATCH_SIZE + 1 }, (_, i) => event({ source_id: `s-${i}` }));
     const { status, json } = await ingestBatch({ machine_id: "m1", events });
     expect(status).toBe(400);
     expect(json.error.code).toBe("BATCH_TOO_LARGE");

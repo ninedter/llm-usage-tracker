@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { NextRequest } from "next/server";
+import { MAX_BATCH_SIZE } from "@/lib/monitor-ingest";
 // The edge ships as its own zero-dependency Node package (see edge/README.md).
 // It is imported here on purpose: this suite is the contract test between the
 // two halves — if the hub's ingest route ever tightens what it accepts, the
@@ -101,10 +102,10 @@ describe("edge -> hub ingest contract", () => {
   });
 
   it("a full edge batch is exactly the size the hub allows", async () => {
-    const bodies = Array.from({ length: ingest.MAX_BATCH_SIZE }, (_, i) => hookBody({ timestamp: 1_700_000_000_000 + i }));
+    const bodies = Array.from({ length: MAX_BATCH_SIZE }, (_, i) => hookBody({ timestamp: 1_700_000_000_000 + i }));
     const { status, json } = await shipLikeEdge(bodies);
     expect(status).toBe(200);
-    expect(json.data.accepted).toBe(ingest.MAX_BATCH_SIZE);
+    expect(json.data.accepted).toBe(MAX_BATCH_SIZE);
   });
 
   it("the hub still refuses an edge batch sent without the bearer token", async () => {
