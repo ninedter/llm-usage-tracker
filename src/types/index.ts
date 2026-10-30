@@ -33,6 +33,7 @@ export interface ModelUsage {
   requestCount?: number;
   utilization?: number; // 0-100, from per-model usage buckets
   level?: UsageLevel;
+  resetTime?: string | null;
 }
 
 export interface BillingInfo {
@@ -46,8 +47,11 @@ export interface BillingInfo {
 // --- Provider-specific Usage ---
 
 export interface ClaudeUsageData {
-  session: UsageWindow;
-  weekly: UsageWindow;
+  planType: string | null;
+  // Missing limits are not zero-usage windows. Verified Ultra accounts, for
+  // example, have a weekly limit but no five-hour session limit.
+  session: UsageWindow | null;
+  weekly: UsageWindow | null;
   modelBreakdown: ModelUsage[];
   billing?: BillingInfo;
   lastUpdated: string;

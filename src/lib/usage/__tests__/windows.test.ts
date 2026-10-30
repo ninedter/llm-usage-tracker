@@ -15,6 +15,7 @@ const win = (percentage: number): UsageWindow => ({
 });
 
 const claude = (session: number, weekly: number): ClaudeUsageData => ({
+  planType: "Pro",
   session: win(session),
   weekly: win(weekly),
   modelBreakdown: [],
@@ -43,6 +44,23 @@ describe("claudeShortestWindow", () => {
     const w = claudeShortestWindow(claude(40, 12))!;
     expect(w.label).toBe("5h");
     expect(w.percentage).toBe(40);
+  });
+
+  it("uses weekly usage for an Ultra account with no session limit", () => {
+    const data = { ...claude(0, 76), planType: "Ultra", session: null };
+    const w = claudeShortestWindow(data)!;
+    expect(w.label).toBe("7d");
+    expect(w.percentage).toBe(76);
+  });
+
+  it("keeps an Ultra account's temporary session limit, including zero usage", () => {
+    const w = claudeShortestWindow({ ...claude(0, 76), planType: "Ultra" })!;
+    expect(w.label).toBe("5h");
+    expect(w.percentage).toBe(0);
+  });
+
+  it("returns null when Claude reports no limits", () => {
+    expect(claudeShortestWindow({ ...claude(0, 0), session: null, weekly: null })).toBeNull();
   });
 });
 

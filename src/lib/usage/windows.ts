@@ -38,9 +38,8 @@ function toStripWindow(w: UsageWindow, windowSeconds: number): StripWindow {
 }
 
 /**
- * Claude's shortest reset window (the 5h session window today). Chosen by
- * comparing window lengths rather than hardcoding "session", so if the plan's
- * windows change the strip follows.
+ * Claude's shortest reported reset window: 5h where a session limit applies,
+ * or 7d for verified Ultra accounts. An absent limit is never a zero-usage bar.
  */
 export function claudeShortestWindow(data: ClaudeUsageData): StripWindow | null {
   const candidates: StripWindow[] = [];

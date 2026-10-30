@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
-import { maybeRollupDaily, processMonitorEvent, validateEventInput, type MonitorEventInput } from "@/lib/monitor-ingest";
+import { MAX_BATCH_SIZE, maybeRollupDaily, processMonitorEvent, validateEventInput, type MonitorEventInput } from "@/lib/monitor-ingest";
 import { normalizeMachineId, normalizeMachineLabel } from "@/lib/machine";
 import type { ApiResponse, IngestResult } from "@/types";
-
-// One batch is deliberately small: the hub writes to SQLite single-threaded, so
-// a huge batch would hold the write lock long enough to stall the local hook
-// path. Edges should chunk rather than send more.
-export const MAX_BATCH_SIZE = 500;
 
 function fail(status: number, code: string, message: string): NextResponse<ApiResponse<IngestResult>> {
   return NextResponse.json({ success: false, error: { code, message } }, { status });

@@ -17,7 +17,7 @@ const BAR_COLORS: Record<UsageLevel, string> = {
 
 /**
  * Live quota for both providers at a glance — each provider's *shortest* reset
- * window only (Claude's 5h, OpenAI's 7d today). The window is chosen
+ * window only (Claude's 5h or 7d, depending on the account). The window is chosen
  * dynamically in @/lib/usage/windows, so this follows the provider if their
  * limits change.
  */
@@ -29,10 +29,13 @@ export function ProviderUsageStrip() {
   const { data: claude } = useClaudeUsage(claudeConnected);
   const { data: openai } = useOpenAIUsage(openaiConnected);
 
-  const rows: { id: ProviderId; window: StripWindow }[] = [];
+  const rows: { id: ProviderId; window: StripWindow; name?: string }[] = [];
   const claudeWindow = claude ? claudeShortestWindow(claude) : null;
   const openaiWindow = openai ? openaiShortestWindow(openai) : null;
-  if (claudeWindow) rows.push({ id: "claude", window: claudeWindow });
+  if (claudeWindow) rows.push({
+    id: "claude", window: claudeWindow,
+    name: claude?.planType ? `Claude ${claude.planType}` : undefined,
+  });
   if (openaiWindow) rows.push({ id: "openai", window: openaiWindow });
 
   if (rows.length === 0) return null;
@@ -40,15 +43,15 @@ export function ProviderUsageStrip() {
   return (
     <div className="mb-4 flex-shrink-0 rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="grid gap-x-8 gap-y-2.5 lg:grid-cols-2">
-        {rows.map(({ id, window }) => (
-          <StripRow key={id} providerId={id} window={window} />
+        {rows.map(({ id, window, name }) => (
+          <StripRow key={id} providerId={id} window={window} name={name} />
         ))}
       </div>
     </div>
   );
 }
 
-function StripRow({ providerId, window: w }: { providerId: ProviderId; window: StripWindow }) {
+function StripRow({ providerId, window: w, name }: { providerId: ProviderId; window: StripWindow; name?: string }) {
   const info = PROVIDER_INFO[providerId];
   const pct = Math.min(100, Math.max(0, w.percentage));
 
@@ -59,7 +62,7 @@ function StripRow({ providerId, window: w }: { providerId: ProviderId; window: S
         style={{ backgroundColor: info.color }}
       />
       <span className="w-48 flex-shrink-0 truncate text-sm font-medium text-zinc-700 dark:text-zinc-300">
-        {info.displayName}
+        {name ?? info.displayName}
       </span>
       <span className="w-7 flex-shrink-0 font-mono text-xs text-zinc-500 dark:text-zinc-400">
         {w.label}

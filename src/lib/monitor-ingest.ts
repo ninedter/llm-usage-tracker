@@ -15,6 +15,10 @@ import { broadcastEvent } from "@/lib/ws";
 import { LOCAL_MACHINE, type MachineCtx } from "@/lib/machine";
 import type { AgentEvent, DbProvider } from "@/types";
 
+// Keep batches small so a single SQLite writer cannot stall local hook events.
+// This lives outside route.ts, which may only export Next.js route fields.
+export const MAX_BATCH_SIZE = 500;
+
 /**
  * One agent-monitor event, in the shape both ingest paths speak.
  *

@@ -1,7 +1,11 @@
 import { execSync } from "child_process";
 import { userInfo } from "os";
 import type { ClaudeUsageData } from "@/types";
-import { getUsageLevel } from "../constants";
+import { claudePlanName, parseClaudeUsage, type ClaudeUsageResponse } from "./claude-usage";
+import { ttlCache } from "../ttl-cache";
+import { createHash } from "crypto";
+
+const sessionPlanCache = ttlCache<string | null>(5 * 60_000);
 
 const BROWSER_HEADERS: Record<string, string> = {
   Accept: "application/json",
@@ -19,39 +23,6 @@ function makeHeaders(sessionKey: string): Record<string, string> {
   };
 }
 
-// Response from claude.ai/api/organizations/{orgId}/usage
-// AND api.anthropic.com/api/oauth/usage
-interface UsageBucket {
-  utilization?: number; // 0-100
-  resets_at?: string | null;
-}
-
-// Modern per-limit entries. Per-model usage (e.g. Fable) only appears here,
-// as weekly_scoped entries with scope.model — the seven_day_<model> buckets
-// are null on current plans.
-interface UsageLimit {
-  kind?: string; // "session" | "weekly_all" | "weekly_scoped" | ...
-  group?: string; // "session" | "weekly"
-  percent?: number; // 0-100
-  resets_at?: string | null;
-  scope?: {
-    model?: { id?: string | null; display_name?: string | null } | null;
-    surface?: string | null;
-  } | null;
-}
-
-interface UsageResponse {
-  five_hour?: UsageBucket;
-  seven_day?: UsageBucket;
-  seven_day_opus?: UsageBucket | null;
-  seven_day_sonnet?: UsageBucket | null;
-  seven_day_oauth_apps?: UsageBucket | null;
-  limits?: UsageLimit[] | null;
-  // Legacy field names (kept for backwards compat)
-  session_usage_percent?: number;
-  weekly_usage_percent?: number;
-}
-
 export class ClaudeClient {
   constructor(
     private sessionKey: string,
@@ -59,10 +30,12 @@ export class ClaudeClient {
   ) {}
 
   static async fetchOrganizations(
-    sessionKey: string
-  ): Promise<Array<{ uuid: string; name: string }>> {
+    sessionKey: string,
+    signal?: AbortSignal,
+  ): Promise<Array<{ uuid: string; name: string; planType: string | null }>> {
     const res = await fetch("https://claude.ai/api/organizations", {
       headers: makeHeaders(sessionKey),
+      signal,
     });
 
     if (!res.ok) {
@@ -82,9 +55,10 @@ export class ClaudeClient {
       throw new Error("No organizations found for this session key.");
     }
 
-    return orgs.map((o: { uuid: string; name: string }) => ({
+    return orgs.map((o: { uuid: string; name: string; billing_type?: string; rate_limit_tier?: string }) => ({
       uuid: o.uuid,
       name: o.name,
+      planType: claudePlanName(o.billing_type, o.rate_limit_tier),
     }));
   }
 
@@ -98,6 +72,7 @@ export class ClaudeClient {
    * (as null) so a machine without Claude Code isn't re-probed per request.
    */
   private static tokenCache: { value: string | null; at: number } | null = null;
+  private static oauthPlanType: string | null = null;
   private static readonly TOKEN_TTL_MS = 5 * 60 * 1000;
   private static readonly TOKEN_RETRY_TTL_MS = 60_000;
 
@@ -115,6 +90,7 @@ export class ClaudeClient {
    */
   static invalidateTokenCache(): void {
     ClaudeClient.tokenCache = null;
+    ClaudeClient.oauthPlanType = null;
   }
 
   /**
@@ -131,6 +107,7 @@ export class ClaudeClient {
   }
 
   private static readTokenUncached(): string | null {
+    ClaudeClient.oauthPlanType = null;
     try {
       if (process.platform !== "darwin") return null;
 
@@ -143,6 +120,10 @@ export class ClaudeClient {
       const creds = JSON.parse(raw);
       const token = creds?.claudeAiOauth?.accessToken;
       if (typeof token === "string" && token.startsWith("sk-ant-oat")) {
+        ClaudeClient.oauthPlanType = claudePlanName(
+          creds.claudeAiOauth.subscriptionType,
+          creds.claudeAiOauth.rateLimitTier,
+        );
         return token;
       }
       return null;
@@ -154,7 +135,7 @@ export class ClaudeClient {
   /**
    * Fetch usage from the OAuth endpoint (covers web + desktop + code).
    */
-  static async fetchOAuthUsage(oauthToken: string): Promise<UsageResponse> {
+  static async fetchOAuthUsage(oauthToken: string): Promise<ClaudeUsageResponse> {
     const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
         Authorization: `Bearer ${oauthToken}`,
@@ -173,13 +154,16 @@ export class ClaudeClient {
   }
 
   async fetchUsage(): Promise<ClaudeUsageData> {
-    let usage: UsageResponse;
+    let usage: ClaudeUsageResponse;
+    let planType: string | null;
 
     // Try OAuth token first (more reliable, covers all clients)
     const oauthToken = ClaudeClient.readClaudeCodeOAuthToken();
     if (oauthToken) {
+      const oauthPlanType = ClaudeClient.oauthPlanType;
       try {
         usage = await ClaudeClient.fetchOAuthUsage(oauthToken);
+        planType = oauthPlanType;
       } catch {
         // Token may be stale/revoked. Don't invalidate outright — that would
         // re-spawn the Keychain probe on every poll while auth stays broken.
@@ -188,15 +172,32 @@ export class ClaudeClient {
         ClaudeClient.markTokenSuspect();
         // Fall back to session key
         usage = await this.fetchSessionUsage();
+        planType = await this.fetchSessionPlan();
       }
     } else {
       usage = await this.fetchSessionUsage();
+      planType = await this.fetchSessionPlan();
     }
 
-    return this.parseUsageResponse(usage);
+    return parseClaudeUsage(usage, planType);
   }
 
-  private async fetchSessionUsage(): Promise<UsageResponse> {
+  private async fetchSessionPlan(): Promise<string | null> {
+    // Never attach the local OAuth account's plan to a session-key fallback:
+    // they may represent different accounts. Plan labels are best-effort and
+    // must not prevent usage from loading if organization metadata fails.
+    const key = createHash("sha256").update(JSON.stringify([this.sessionKey, this.organizationId])).digest("hex");
+    try {
+      return await sessionPlanCache.get(key, async () => {
+        const organizations = await ClaudeClient.fetchOrganizations(this.sessionKey, AbortSignal.timeout(3000));
+        return organizations.find((o) => o.uuid === this.organizationId)?.planType ?? null;
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchSessionUsage(): Promise<ClaudeUsageResponse> {
     const headers = makeHeaders(this.sessionKey);
 
     const usageRes = await fetch(
@@ -216,91 +217,5 @@ export class ClaudeClient {
     }
 
     return usageRes.json();
-  }
-
-  private parseUsageResponse(usage: UsageResponse): ClaudeUsageData {
-    // New format: five_hour.utilization (0-100), seven_day.utilization (0-100)
-    const fiveHourUtil = usage.five_hour?.utilization ?? 0;
-    const sevenDayUtil = usage.seven_day?.utilization ?? 0;
-    const fiveHourReset = usage.five_hour?.resets_at ?? null;
-    const sevenDayReset = usage.seven_day?.resets_at ?? null;
-
-    // Legacy format fallback
-    const sessionPct =
-      fiveHourUtil > 0
-        ? fiveHourUtil
-        : (usage.session_usage_percent ?? 0) * 100;
-    const weeklyPct =
-      sevenDayUtil > 0
-        ? sevenDayUtil
-        : (usage.weekly_usage_percent ?? 0) * 100;
-
-    // Per-model breakdown from scoped limits entries (e.g. Fable, Opus).
-    // The scoped percent shares the weekly window, so it renders alongside
-    // the 7-day bar the same way the old seven_day_* buckets did.
-    const modelBreakdown: ClaudeUsageData["modelBreakdown"] = [];
-
-    for (const limit of usage.limits ?? []) {
-      const modelName = limit.scope?.model?.display_name;
-      if (modelName && limit.percent != null) {
-        modelBreakdown.push({
-          modelId: modelName.toLowerCase(),
-          modelName,
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: limit.percent,
-          level: getUsageLevel(limit.percent),
-        });
-      }
-    }
-
-    // Legacy seven_day_* buckets (null on current plans)
-    if (modelBreakdown.length === 0) {
-      if (usage.seven_day_opus?.utilization != null) {
-        const opusUtil = usage.seven_day_opus.utilization;
-        modelBreakdown.push({
-          modelId: "opus",
-          modelName: "Opus",
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: opusUtil,
-          level: getUsageLevel(opusUtil),
-        });
-      }
-
-      if (usage.seven_day_sonnet?.utilization != null) {
-        const sonnetUtil = usage.seven_day_sonnet.utilization;
-        modelBreakdown.push({
-          modelId: "sonnet",
-          modelName: "Sonnet",
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: sonnetUtil,
-          level: getUsageLevel(sonnetUtil),
-        });
-      }
-    }
-
-    return {
-      session: {
-        tokensUsed: 0,
-        tokenLimit: 0,
-        percentage: sessionPct,
-        resetTime: fiveHourReset,
-        level: getUsageLevel(sessionPct),
-      },
-      weekly: {
-        tokensUsed: 0,
-        tokenLimit: 0,
-        percentage: weeklyPct,
-        resetTime: sevenDayReset,
-        level: getUsageLevel(weeklyPct),
-      },
-      modelBreakdown,
-      lastUpdated: new Date().toISOString(),
-    };
   }
 }

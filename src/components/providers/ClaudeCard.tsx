@@ -29,7 +29,7 @@ export function ClaudeCard({ enabled }: { enabled: boolean }) {
 
   return (
     <ProviderCard
-      name={info.displayName}
+      name={data?.planType ? `Claude ${data.planType}` : info.displayName}
       color={info.color}
       icon={<ClaudeIcon />}
       connected={!!data}
@@ -38,18 +38,37 @@ export function ClaudeCard({ enabled }: { enabled: boolean }) {
     >
       {data && (
         <>
-          <UsageBar
-            label="5-Hour Window"
-            percentage={data.session.percentage}
-            level={data.session.level}
-            resetTime={data.session.resetTime}
-          />
-          <UsageBar
-            label="7-Day Window"
-            percentage={data.weekly.percentage}
-            level={data.weekly.level}
-            resetTime={data.weekly.resetTime}
-          />
+          {data.session && (
+            <UsageBar
+              label="5-Hour Window"
+              percentage={data.session.percentage}
+              level={data.session.level}
+              resetTime={data.session.resetTime}
+            />
+          )}
+          {data.weekly && (
+            <UsageBar
+              label="7-Day Window"
+              percentage={data.weekly.percentage}
+              level={data.weekly.level}
+              resetTime={data.weekly.resetTime}
+            />
+          )}
+          {!data.session && data.weekly && (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              No five-hour limit reported for this account. Weekly limits still apply.
+            </p>
+          )}
+          {data.planType === "Ultra" && data.session && (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              A temporary five-hour limit applies until your Ultra account is verified.
+            </p>
+          )}
+          {!data.session && !data.weekly && data.modelBreakdown.length === 0 && (
+            <p className="text-sm text-zinc-500">
+              No usage limits are currently reported for this account.
+            </p>
+          )}
 
           {data.modelBreakdown.length > 0 && (
             <div className="ml-3 space-y-2 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
@@ -62,6 +81,7 @@ export function ClaudeCard({ enabled }: { enabled: boolean }) {
                       label={m.modelName}
                       percentage={m.utilization}
                       level={m.level}
+                      resetTime={m.resetTime}
                     />
                   )
               )}
