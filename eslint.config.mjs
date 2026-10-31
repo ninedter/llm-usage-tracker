@@ -16,6 +16,8 @@ const eslintConfig = defineConfig([
     "dist-electron/**",
     // tsc output compiled from electron/*.ts (see electron/tsconfig.json)
     "electron/**/*.js",
+    // Claude Code worktrees can contain independent generated Next.js output.
+    ".claude/worktrees/**",
   ]),
 ]);
 

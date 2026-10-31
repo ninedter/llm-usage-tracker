@@ -1,74 +1,62 @@
-import { execSync } from "child_process";
+import { execFile } from "child_process";
 import { userInfo } from "os";
+import { promisify } from "util";
 import type { ClaudeUsageData } from "@/types";
-import { getUsageLevel } from "../constants";
+import { UPSTREAM_TIMEOUT_MS } from "../constants";
+import {
+  parseClaudeUsage,
+  type ClaudePrepaidRaw,
+  type ClaudeSpendLimitRaw,
+  type ClaudeUsageResponse,
+} from "./claude-parse";
+import { CLAUDE_OAUTH_EXPIRED_MESSAGE, UpstreamAuthError } from "./errors";
 
-const BROWSER_HEADERS: Record<string, string> = {
-  Accept: "application/json",
-  "Accept-Language": "en-US,en;q=0.9",
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  Referer: "https://claude.ai/",
-  Origin: "https://claude.ai",
-};
+const execFileAsync = promisify(execFile);
+
+const OAUTH_USER_AGENT = () => process.env.CLAUDE_CODE_USER_AGENT || "claude-code/2.0.32";
+const WEB_USER_AGENT = () =>
+  process.env.CLAUDE_WEB_USER_AGENT ||
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 function makeHeaders(sessionKey: string): Record<string, string> {
   return {
-    ...BROWSER_HEADERS,
+    Accept: "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": WEB_USER_AGENT(),
+    Referer: "https://claude.ai/",
+    Origin: "https://claude.ai",
     Cookie: `sessionKey=${sessionKey}`,
   };
 }
 
-// Response from claude.ai/api/organizations/{orgId}/usage
-// AND api.anthropic.com/api/oauth/usage
-interface UsageBucket {
-  utilization?: number; // 0-100
-  resets_at?: string | null;
+const timeoutSignal = () => AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+
+/** Keychain probe result: `expired` means signed in once, but the token lapsed. */
+export interface ClaudeOAuthState {
+  token: string | null;
+  expired: boolean;
 }
 
-// Modern per-limit entries. Per-model usage (e.g. Fable) only appears here,
-// as weekly_scoped entries with scope.model — the seven_day_<model> buckets
-// are null on current plans.
-interface UsageLimit {
-  kind?: string; // "session" | "weekly_all" | "weekly_scoped" | ...
-  group?: string; // "session" | "weekly"
-  percent?: number; // 0-100
-  resets_at?: string | null;
-  scope?: {
-    model?: { id?: string | null; display_name?: string | null } | null;
-    surface?: string | null;
-  } | null;
-}
-
-interface UsageResponse {
-  five_hour?: UsageBucket;
-  seven_day?: UsageBucket;
-  seven_day_opus?: UsageBucket | null;
-  seven_day_sonnet?: UsageBucket | null;
-  seven_day_oauth_apps?: UsageBucket | null;
-  limits?: UsageLimit[] | null;
-  // Legacy field names (kept for backwards compat)
-  session_usage_percent?: number;
-  weekly_usage_percent?: number;
+export interface ClaudeSessionCreds {
+  sessionKey: string;
+  organizationId: string;
 }
 
 export class ClaudeClient {
-  constructor(
-    private sessionKey: string,
-    private organizationId: string
-  ) {}
+  constructor(private session: ClaudeSessionCreds | null) {}
 
   static async fetchOrganizations(
     sessionKey: string
   ): Promise<Array<{ uuid: string; name: string }>> {
     const res = await fetch("https://claude.ai/api/organizations", {
       headers: makeHeaders(sessionKey),
+      signal: timeoutSignal(),
     });
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       if (res.status === 401 || res.status === 403) {
-        throw new Error(
+        throw new UpstreamAuthError(
           `Session key is expired or invalid (${res.status}). ${body ? "Response: " + body.slice(0, 200) : ""}`
         );
       }
@@ -90,23 +78,48 @@ export class ClaudeClient {
 
   /**
    * Try to read Claude Code's OAuth token from the macOS Keychain.
-   * Returns the access token or null if not found.
-   *
-   * Memoized for 5 minutes: `security` forks a subprocess and hits the
-   * Keychain — doing that on every 60s usage poll (and every health check)
-   * stalls the event loop for no benefit. A failed/absent token also caches
-   * (as null) so a machine without Claude Code isn't re-probed per request.
+   * Returns the access token or null if not found / expired.
    */
-  private static tokenCache: { value: string | null; at: number } | null = null;
+  static async readClaudeCodeOAuthToken(): Promise<string | null> {
+    return (await ClaudeClient.readClaudeCodeOAuthState()).token;
+  }
+
+  /**
+   * Keychain probe that tells "never signed in" apart from "sign-in expired",
+   * so an expired token surfaces as AUTH_EXPIRED instead of looking unconfigured.
+   *
+   * Memoized: `security` hits the Keychain — doing that on every 60s usage
+   * poll (and every health check) is wasteful. An absent token caches for the
+   * full TTL so a machine without Claude Code isn't re-probed per request; an
+   * expired one only for TOKEN_RETRY_TTL_MS so a fresh `claude` sign-in is
+   * picked up within a minute; a valid one never outlives its own expiresAt.
+   * Concurrent callers during a probe share one in-flight `execFile`.
+   */
+  private static tokenCache: { state: ClaudeOAuthState; until: number } | null = null;
+  private static tokenInFlight: Promise<ClaudeOAuthState> | null = null;
   private static readonly TOKEN_TTL_MS = 5 * 60 * 1000;
   private static readonly TOKEN_RETRY_TTL_MS = 60_000;
 
-  static readClaudeCodeOAuthToken(): string | null {
+  static async readClaudeCodeOAuthState(): Promise<ClaudeOAuthState> {
     const cached = ClaudeClient.tokenCache;
-    if (cached && Date.now() - cached.at < ClaudeClient.TOKEN_TTL_MS) return cached.value;
-    const value = ClaudeClient.readTokenUncached();
-    ClaudeClient.tokenCache = { value, at: Date.now() };
-    return value;
+    if (cached && Date.now() < cached.until) return cached.state;
+    if (ClaudeClient.tokenInFlight) return ClaudeClient.tokenInFlight;
+
+    const probe: Promise<ClaudeOAuthState> = ClaudeClient.readTokenUncached().then(
+      ({ expiresAt, ...state }) => {
+        // invalidateTokenCache() during the probe detaches it: don't resurrect a stale value
+        if (ClaudeClient.tokenInFlight === probe) {
+          const now = Date.now();
+          let until = now + (state.expired ? ClaudeClient.TOKEN_RETRY_TTL_MS : ClaudeClient.TOKEN_TTL_MS);
+          if (expiresAt != null) until = Math.min(until, expiresAt);
+          ClaudeClient.tokenCache = { state, until };
+          ClaudeClient.tokenInFlight = null;
+        }
+        return state;
+      }
+    );
+    ClaudeClient.tokenInFlight = probe;
+    return probe;
   }
 
   /**
@@ -115,57 +128,66 @@ export class ClaudeClient {
    */
   static invalidateTokenCache(): void {
     ClaudeClient.tokenCache = null;
+    ClaudeClient.tokenInFlight = null;
   }
 
   /**
-   * After an OAuth failure, don't drop the cached token outright — that would
-   * re-spawn the Keychain probe on every poll while auth stays broken. Keep
-   * the cached value but shorten its remaining life to TOKEN_RETRY_TTL_MS so
-   * the next probe happens in at most a minute.
+   * After an OAuth auth failure, don't drop the cached token outright — that
+   * would re-spawn the Keychain probe on every poll while auth stays broken.
+   * Keep the cached value but shorten its remaining life to TOKEN_RETRY_TTL_MS
+   * so the next probe happens in at most a minute.
    */
   static markTokenSuspect(): void {
     const c = ClaudeClient.tokenCache;
     if (!c) return;
-    const retryAt = Date.now() - ClaudeClient.TOKEN_TTL_MS + ClaudeClient.TOKEN_RETRY_TTL_MS;
-    if (c.at > retryAt) ClaudeClient.tokenCache = { value: c.value, at: retryAt };
+    const retryUntil = Date.now() + ClaudeClient.TOKEN_RETRY_TTL_MS;
+    if (c.until > retryUntil) ClaudeClient.tokenCache = { state: c.state, until: retryUntil };
   }
 
-  private static readTokenUncached(): string | null {
+  private static async readTokenUncached(): Promise<ClaudeOAuthState & { expiresAt?: number }> {
+    const absent = { token: null, expired: false };
     try {
-      if (process.platform !== "darwin") return null;
+      if (process.platform !== "darwin") return absent;
 
       const username = userInfo().username;
-      const raw = execSync(
-        `security find-generic-password -s "Claude Code-credentials" -a "${username}" -w 2>/dev/null`,
-        { encoding: "utf-8", timeout: 3000 }
-      ).trim();
+      const { stdout } = await execFileAsync(
+        "security",
+        ["find-generic-password", "-s", "Claude Code-credentials", "-a", username, "-w"],
+        { timeout: 3000 }
+      );
 
-      const creds = JSON.parse(raw);
-      const token = creds?.claudeAiOauth?.accessToken;
-      if (typeof token === "string" && token.startsWith("sk-ant-oat")) {
-        return token;
-      }
-      return null;
+      const creds = JSON.parse(String(stdout).trim());
+      const oauth = creds?.claudeAiOauth;
+      const token = oauth?.accessToken;
+      if (typeof token !== "string" || !token.startsWith("sk-ant-oat")) return absent;
+      const expiresAt = typeof oauth?.expiresAt === "number" ? oauth.expiresAt : undefined;
+      // An expired token only produces a 401 and a pointless fallback round-trip
+      if (expiresAt != null && expiresAt < Date.now()) return { token: null, expired: true };
+      return { token, expired: false, expiresAt };
     } catch {
-      return null;
+      return absent;
     }
   }
 
   /**
    * Fetch usage from the OAuth endpoint (covers web + desktop + code).
    */
-  static async fetchOAuthUsage(oauthToken: string): Promise<UsageResponse> {
+  static async fetchOAuthUsage(oauthToken: string): Promise<ClaudeUsageResponse> {
     const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: {
         Authorization: `Bearer ${oauthToken}`,
         "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "claude-code/2.0.32",
+        "User-Agent": OAUTH_USER_AGENT(),
         "Content-Type": "application/json",
         Accept: "application/json",
       },
+      signal: timeoutSignal(),
     });
 
     if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        throw new UpstreamAuthError(`OAuth usage API returned ${res.status}`);
+      }
       throw new Error(`OAuth usage API returned ${res.status}`);
     }
 
@@ -173,42 +195,56 @@ export class ClaudeClient {
   }
 
   async fetchUsage(): Promise<ClaudeUsageData> {
-    let usage: UsageResponse;
-
-    // Try OAuth token first (more reliable, covers all clients)
-    const oauthToken = ClaudeClient.readClaudeCodeOAuthToken();
-    if (oauthToken) {
-      try {
-        usage = await ClaudeClient.fetchOAuthUsage(oauthToken);
-      } catch {
-        // Token may be stale/revoked. Don't invalidate outright — that would
-        // re-spawn the Keychain probe on every poll while auth stays broken.
-        // Mark it suspect so the next probe happens within a minute instead
-        // of waiting out the full 5min TTL.
-        ClaudeClient.markTokenSuspect();
-        // Fall back to session key
-        usage = await this.fetchSessionUsage();
-      }
-    } else {
-      usage = await this.fetchSessionUsage();
+    const { token: oauthToken, expired } = await ClaudeClient.readClaudeCodeOAuthState();
+    if (!oauthToken && !this.session) {
+      if (expired) throw new UpstreamAuthError(CLAUDE_OAUTH_EXPIRED_MESSAGE);
+      throw new Error(
+        "No Claude credentials: save a claude.ai session key in Settings or sign in to Claude Code."
+      );
     }
 
-    return this.parseUsageResponse(usage);
+    // Credit endpoints are session-only and best-effort; start them alongside usage
+    const extrasPromise = this.session
+      ? this.fetchExtras(this.session)
+      : Promise.resolve({ prepaid: null, spendLimit: null });
+
+    const usage = await this.fetchUsageBody(oauthToken);
+    // OAuth can omit the cloud-session promo bucket. A saved web session can
+    // fill it without replacing OAuth quota data or failing the whole request.
+    if (oauthToken && this.session && usage.iguana_necktie == null) {
+      const webUsage = await this.fetchOptionalJson<ClaudeUsageResponse>(this.session, "usage");
+      if (webUsage?.iguana_necktie) usage.iguana_necktie = webUsage.iguana_necktie;
+    }
+    const extras = await extrasPromise;
+    return parseClaudeUsage(usage, extras);
   }
 
-  private async fetchSessionUsage(): Promise<UsageResponse> {
-    const headers = makeHeaders(this.sessionKey);
+  private async fetchUsageBody(oauthToken: string | null): Promise<ClaudeUsageResponse> {
+    if (!oauthToken) return this.fetchSessionUsage(this.session!);
 
+    try {
+      return await ClaudeClient.fetchOAuthUsage(oauthToken);
+    } catch (err) {
+      // Only a rejected credential makes the token suspect. Don't invalidate
+      // outright — that would re-spawn the Keychain probe on every poll while
+      // auth stays broken; shorten its life so the next probe is within a minute.
+      if (err instanceof UpstreamAuthError) ClaudeClient.markTokenSuspect();
+      if (!this.session) throw err;
+      return this.fetchSessionUsage(this.session);
+    }
+  }
+
+  private async fetchSessionUsage(session: ClaudeSessionCreds): Promise<ClaudeUsageResponse> {
     const usageRes = await fetch(
-      `https://claude.ai/api/organizations/${this.organizationId}/usage`,
-      { headers }
+      `https://claude.ai/api/organizations/${session.organizationId}/usage`,
+      { headers: makeHeaders(session.sessionKey), signal: timeoutSignal() }
     );
 
     if (!usageRes.ok) {
       const status = usageRes.status;
       const body = await usageRes.text().catch(() => "");
       if (status === 401 || status === 403) {
-        throw new Error(
+        throw new UpstreamAuthError(
           `Session key expired or invalid. Please update it in Settings. (${status})`
         );
       }
@@ -218,89 +254,30 @@ export class ClaudeClient {
     return usageRes.json();
   }
 
-  private parseUsageResponse(usage: UsageResponse): ClaudeUsageData {
-    // New format: five_hour.utilization (0-100), seven_day.utilization (0-100)
-    const fiveHourUtil = usage.five_hour?.utilization ?? 0;
-    const sevenDayUtil = usage.seven_day?.utilization ?? 0;
-    const fiveHourReset = usage.five_hour?.resets_at ?? null;
-    const sevenDayReset = usage.seven_day?.resets_at ?? null;
+  private async fetchExtras(
+    session: ClaudeSessionCreds
+  ): Promise<{ prepaid: ClaudePrepaidRaw | null; spendLimit: ClaudeSpendLimitRaw | null }> {
+    const [prepaid, spendLimit] = await Promise.all([
+      this.fetchOptionalJson<ClaudePrepaidRaw>(session, "prepaid/credits"),
+      this.fetchOptionalJson<ClaudeSpendLimitRaw>(session, "overage_spend_limit"),
+    ]);
+    return { prepaid, spendLimit };
+  }
 
-    // Legacy format fallback
-    const sessionPct =
-      fiveHourUtil > 0
-        ? fiveHourUtil
-        : (usage.session_usage_percent ?? 0) * 100;
-    const weeklyPct =
-      sevenDayUtil > 0
-        ? sevenDayUtil
-        : (usage.weekly_usage_percent ?? 0) * 100;
-
-    // Per-model breakdown from scoped limits entries (e.g. Fable, Opus).
-    // The scoped percent shares the weekly window, so it renders alongside
-    // the 7-day bar the same way the old seven_day_* buckets did.
-    const modelBreakdown: ClaudeUsageData["modelBreakdown"] = [];
-
-    for (const limit of usage.limits ?? []) {
-      const modelName = limit.scope?.model?.display_name;
-      if (modelName && limit.percent != null) {
-        modelBreakdown.push({
-          modelId: modelName.toLowerCase(),
-          modelName,
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: limit.percent,
-          level: getUsageLevel(limit.percent),
-        });
-      }
+  /** Best-effort GET: any failure (network, timeout, non-2xx, bad JSON) is null. */
+  private async fetchOptionalJson<T>(
+    session: ClaudeSessionCreds,
+    path: string
+  ): Promise<T | null> {
+    try {
+      const res = await fetch(
+        `https://claude.ai/api/organizations/${session.organizationId}/${path}`,
+        { headers: makeHeaders(session.sessionKey), signal: timeoutSignal() }
+      );
+      if (!res.ok) return null;
+      return (await res.json()) as T;
+    } catch {
+      return null;
     }
-
-    // Legacy seven_day_* buckets (null on current plans)
-    if (modelBreakdown.length === 0) {
-      if (usage.seven_day_opus?.utilization != null) {
-        const opusUtil = usage.seven_day_opus.utilization;
-        modelBreakdown.push({
-          modelId: "opus",
-          modelName: "Opus",
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: opusUtil,
-          level: getUsageLevel(opusUtil),
-        });
-      }
-
-      if (usage.seven_day_sonnet?.utilization != null) {
-        const sonnetUtil = usage.seven_day_sonnet.utilization;
-        modelBreakdown.push({
-          modelId: "sonnet",
-          modelName: "Sonnet",
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          utilization: sonnetUtil,
-          level: getUsageLevel(sonnetUtil),
-        });
-      }
-    }
-
-    return {
-      session: {
-        tokensUsed: 0,
-        tokenLimit: 0,
-        percentage: sessionPct,
-        resetTime: fiveHourReset,
-        level: getUsageLevel(sessionPct),
-      },
-      weekly: {
-        tokensUsed: 0,
-        tokenLimit: 0,
-        percentage: weeklyPct,
-        resetTime: sevenDayReset,
-        level: getUsageLevel(weeklyPct),
-      },
-      modelBreakdown,
-      lastUpdated: new Date().toISOString(),
-    };
   }
 }

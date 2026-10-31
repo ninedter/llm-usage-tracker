@@ -23,7 +23,7 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 pb-8">
       {/* Header */}
-      <div className="titlebar-drag mb-6 flex items-center justify-between pt-2">
+      <div className="titlebar-drag mb-6 flex flex-wrap items-center justify-between gap-y-2 pt-2">
         <div>
           <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
             Settings
@@ -32,7 +32,7 @@ export default function SettingsPage() {
             Configure your API credentials and display preferences.
           </p>
         </div>
-        <div className="titlebar-no-drag flex items-center gap-3">
+        <div className="titlebar-no-drag flex flex-wrap items-center gap-3 gap-y-2">
           <NavLinks current="/settings" />
         </div>
       </div>

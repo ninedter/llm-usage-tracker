@@ -44,7 +44,7 @@ function toStripWindow(w: UsageWindow, windowSeconds: number): StripWindow {
  */
 export function claudeShortestWindow(data: ClaudeUsageData): StripWindow | null {
   const candidates: StripWindow[] = [];
-  if (data.session) candidates.push(toStripWindow(data.session, CLAUDE_SESSION_WINDOW_SECONDS));
+  if (data.session && !data.hideSessionWindow) candidates.push(toStripWindow(data.session, CLAUDE_SESSION_WINDOW_SECONDS));
   if (data.weekly) candidates.push(toStripWindow(data.weekly, CLAUDE_WEEKLY_WINDOW_SECONDS));
   return pickShortest(candidates);
 }
