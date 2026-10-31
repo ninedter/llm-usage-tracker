@@ -11,7 +11,7 @@ export default function Home() {
   return (
     <div className="mx-auto w-full px-4 pb-8">
       {/* Header — draggable for Electron window movement */}
-      <div className="titlebar-drag mb-4 flex items-center justify-between pt-2">
+      <div className="titlebar-drag mb-4 flex flex-wrap items-center justify-between gap-y-2 pt-2">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">
             LLM Usage Tracker
@@ -20,7 +20,7 @@ export default function Home() {
             Monitor your AI usage and agent activity.
           </p>
         </div>
-        <div className="titlebar-no-drag flex items-center gap-3">
+        <div className="titlebar-no-drag flex flex-wrap items-center gap-3 gap-y-2">
           <RefreshControl />
           <NavLinks current="/" />
         </div>

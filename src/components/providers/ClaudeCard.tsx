@@ -4,13 +4,23 @@ import { useClaudeUsage } from "@/hooks/use-usage-data";
 import { PROVIDER_INFO } from "@/lib/constants";
 import { ProviderCard } from "@/components/dashboard/ProviderCard";
 import { UsageBar } from "@/components/dashboard/UsageBar";
+import { UsageStat } from "@/components/dashboard/UsageStat";
+import { CreditSection } from "@/components/dashboard/CreditSection";
 import { CardSkeleton } from "@/components/ui/Skeleton";
+import { formatMoney } from "@/lib/format";
+import type { ClaudeCloudCredits, ClaudeExtraUsage, MoneyAmount } from "@/types";
 
-export function ClaudeCard({ enabled }: { enabled: boolean }) {
-  const { data, error, isLoading } = useClaudeUsage(enabled);
+export function ClaudeCard() {
+  const { data, error, isLoading } = useClaudeUsage();
   const info = PROVIDER_INFO.claude;
 
-  if (!enabled) {
+  // A retry in flight after an error is not a first load: keep the error UI up
+  if (isLoading && !data && !error) return <CardSkeleton />;
+
+  // Only a definitive "no credentials" answer earns the setup placeholder —
+  // even over stale data, so deleting credentials clears the card. Any other
+  // failure keeps whatever data we have and shows the error banner.
+  if (error?.code === "MISSING_CREDENTIALS") {
     return (
       <ProviderCard
         name={info.displayName}
@@ -25,25 +35,25 @@ export function ClaudeCard({ enabled }: { enabled: boolean }) {
     );
   }
 
-  if (isLoading) return <CardSkeleton />;
-
   return (
     <ProviderCard
       name={info.displayName}
       color={info.color}
       icon={<ClaudeIcon />}
-      connected={!!data}
+      connected={!!data && !error}
       lastUpdated={data?.lastUpdated}
       error={error?.message}
     >
       {data && (
         <>
-          <UsageBar
-            label="5-Hour Window"
-            percentage={data.session.percentage}
-            level={data.session.level}
-            resetTime={data.session.resetTime}
-          />
+          {data.session && !data.hideSessionWindow && (
+            <UsageBar
+              label="5-Hour Window"
+              percentage={data.session.percentage}
+              level={data.session.level}
+              resetTime={data.session.resetTime}
+            />
+          )}
           <UsageBar
             label="7-Day Window"
             percentage={data.weekly.percentage}
@@ -68,12 +78,88 @@ export function ClaudeCard({ enabled }: { enabled: boolean }) {
             </div>
           )}
 
+          {data.cloudCredits && <CloudSessionCredits credit={data.cloudCredits} />}
+
+          {(data.extraUsage || data.prepaidBalance) && (
+            <ClaudeCredits extraUsage={data.extraUsage} prepaidBalance={data.prepaidBalance} />
+          )}
+
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
             Combined usage across claude.ai, Claude Code, and Claude Desktop.
           </p>
         </>
       )}
     </ProviderCard>
+  );
+}
+
+function CloudSessionCredits({ credit: c }: { credit: ClaudeCloudCredits }) {
+  const expired = c.expired;
+  return (
+    <CreditSection title="Cloud session credits" alert={expired ? "Expired" : c.remaining === 0 ? "Used up" : undefined}>
+      <UsageBar label="Included credit" percentage={c.percentage} level={c.level} />
+      <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        {formatMoney(c.remaining, c.currency)} of {formatMoney(c.total, c.currency)} left
+      </p>
+      {c.expiresAt && (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          {expired ? "Expired" : "Expires"}{" "}
+          {new Intl.DateTimeFormat(undefined, {
+            month: "long", day: "numeric", year: "numeric",
+            hour: "numeric", minute: "2-digit", timeZoneName: "short",
+          }).format(new Date(c.expiresAt))}
+        </p>
+      )}
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Applies automatically to cloud sessions. After it is used or expires, your plan’s regular usage applies.
+      </p>
+    </CreditSection>
+  );
+}
+
+function ClaudeCredits({
+  extraUsage: x,
+  prepaidBalance,
+}: {
+  extraUsage: ClaudeExtraUsage | null;
+  prepaidBalance: MoneyAmount | null;
+}) {
+  return (
+    <CreditSection alert={x?.outOfCredits ? "Out of credits" : undefined}>
+      {prepaidBalance && (
+        <UsageStat
+          label="Prepaid balance"
+          value={formatMoney(prepaidBalance.amount, prepaidBalance.currency)}
+        />
+      )}
+
+      {x &&
+        (!x.enabled ? (
+          <p className="text-xs text-zinc-400 dark:text-zinc-500">Extra usage is off</p>
+        ) : x.monthlyLimit != null ? (
+          <div className="space-y-1">
+            <UsageBar
+              label="Extra usage this month"
+              percentage={x.percentage ?? 0}
+              level={x.level}
+              used={formatMoney(x.used, x.currency)}
+              limit={formatMoney(x.monthlyLimit, x.currency)}
+            />
+            {x.remaining != null && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {formatMoney(x.remaining, x.currency)} left
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+              {formatMoney(x.used, x.currency)}
+            </span>{" "}
+            spent this month · no monthly cap
+          </p>
+        ))}
+    </CreditSection>
   );
 }
 

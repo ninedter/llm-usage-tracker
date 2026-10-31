@@ -40,7 +40,9 @@ export function ProviderCard({
               {name}
             </h3>
           </div>
-          <ConnectionBadge connected={connected} />
+          <ConnectionBadge
+            status={connected ? "connected" : error ? "error" : "unconfigured"}
+          />
         </div>
 
         {/* Error state */}

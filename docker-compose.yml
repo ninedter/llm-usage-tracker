@@ -20,6 +20,7 @@ services:
       # time by Next.js, so browser code that reads it needs a rebuild — today
       # only edge agents and docs consume this value.
       NEXT_PUBLIC_HUB_URL: ${NEXT_PUBLIC_HUB_URL:-http://henrys-mac-mini:3789}
+    # CLAUDE_USAGE_WINDOW=weekly in .env.local selects the Ultra display.
     # Provides ENCRYPTION_KEY and INGEST_TOKEN — the standalone server doesn't
     # load dotenv files, and without a stable key the stored credentials can't
     # be decrypted
