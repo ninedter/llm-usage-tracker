@@ -4,6 +4,7 @@ import { useOpenAIUsage } from "@/hooks/use-usage-data";
 import { PROVIDER_INFO } from "@/lib/constants";
 import { ProviderCard } from "@/components/dashboard/ProviderCard";
 import { UsageBar } from "@/components/dashboard/UsageBar";
+import { UsageStat } from "@/components/dashboard/UsageStat";
 import { ResetCredits } from "@/components/dashboard/ResetCredits";
 import { CreditSection } from "@/components/dashboard/CreditSection";
 import { CardSkeleton } from "@/components/ui/Skeleton";
@@ -70,22 +71,21 @@ export function OpenAICard() {
             </div>
           )}
 
-          {(data.credits || data.creditsDepleted) && (
-            <CreditSection alert={data.creditsDepleted ? "Depleted" : undefined}>
-              <p
-                className={
-                  data.credits?.hasCredits
-                    ? "text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                    : "text-sm text-zinc-500 dark:text-zinc-400"
-                }
-              >
-                {openaiCreditSummary(data) ?? "No credits"}
-              </p>
-            </CreditSection>
-          )}
-
           {data.resetCreditsAvailable != null && (
             <ResetCredits available={data.resetCreditsAvailable} credits={data.resetCredits} noun="rate-limit reset" />
+          )}
+
+          {/* Same order and format as the Claude card: resets, then add-on credits */}
+          {(data.credits || data.creditsDepleted) && (
+            <CreditSection alert={data.creditsDepleted ? "Depleted" : undefined}>
+              {data.credits?.unlimited || data.credits?.hasCredits ? (
+                <UsageStat label="Credit balance" value={openaiCreditSummary(data) ?? ""} />
+              ) : (
+                <p className="text-xs text-zinc-400 dark:text-zinc-500">
+                  {openaiCreditSummary(data) ?? "No credits"}
+                </p>
+              )}
+            </CreditSection>
           )}
 
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
