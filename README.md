@@ -1,13 +1,13 @@
 # LLM Usage Tracker
 
-An always-on Docker application, opened in any browser, that monitors your AI subscription quotas (Claude, OpenAI/Codex) and tracks every Claude Code and Codex agent session in real time — which tools they call, which files they touch, what it all costs, and how you work across the week. Run one container as a hub and several machines report into it.
+An always-on Docker application, opened in any browser, that monitors your AI subscription quotas (Claude, OpenAI/Codex, Grok) and tracks every Claude Code and Codex agent session in real time — which tools they call, which files they touch, what it all costs, and how you work across the week. Run one container as a hub and several machines report into it.
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-node22--slim-2496ED?logo=docker&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-194%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-338%20passing-brightgreen)
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -15,6 +15,7 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 
 ## Table of Contents
 
+- [Recent updates](#recent-updates)
 - [What it does](#what-it-does)
 - [The four pages](#the-four-pages)
 - [Architecture](#architecture)
@@ -33,9 +34,41 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 
 ---
 
+## Recent updates
+
+**0.2.0 — November 17, 2026**
+
+- **Grok card.** A third provider card shows Grok Bot's saved weekly usage and on-demand spend, read from Grok Bot's local cache. It shows the reading's age and hides the percentage once the saved weekly window has reset. Grok also appears in the Monitor strip and in Settings provider status. See [Grok](#grok).
+- **Claude limit resets.** The Claude card lists available limit-reset tickets with their expiry; hover over a ticket for the provider's description.
+- **Desktop shell removed.** The retired Electron app, its `electron:*` scripts and its build dependencies are gone. The tracker is the Docker container opened in a browser; use the browser's "install as app" on `http://localhost:3789` for a dock icon.
+
+**October 31, 2026**
+
+- **Claude Ultra display.** Set `CLAUDE_USAGE_WINDOW=weekly` to show weekly and model limits on the Dashboard and Monitor. Automatic mode hides empty session placeholders and keeps real five-hour windows. Weekly-only mode changes the display; upstream session metrics remain in the API.
+- **Cloud session credits.** A separate section shows the promotional grant, amount remaining, percentage used and expiry in your local timezone. Expired and depleted grants are marked. These credits apply to cloud sessions and are separate from prepaid balance and monthly extra usage.
+- **Credit fetching.** A saved claude.ai session key fills cloud credits when OAuth usage omits them. Optional credit fetch failures leave the main quota card working. The Monitor prioritizes available cloud credit over a zero prepaid balance.
+- **Refresh and errors.** Manual Refresh bypasses the server cache. Failed cards retain their last good data with an error, and keep polling with bounded retries. Settings distinguishes missing credentials from expired sign-in.
+- **Validation and dependencies.** CI runs lint, typecheck, both test suites and a production build. The production dependency tree includes the `source-map-js` 1.2.2 security patch; `npm audit --omit=dev` reported zero advisories at the October 31, 2026 review. At the November 17, 2026 check it reports one moderate Next.js advisory (GHSA-mfr8-8qww-v76h, fixed in 16.4.6), which concerns `'use cache'` with `unstable_cache()` — neither is used here.
+
+To use weekly-only display, add this setting to the existing `.env.local` (keep your encryption key and other settings):
+
+```dotenv
+CLAUDE_USAGE_WINDOW=weekly
+```
+
+Then rebuild using your existing Compose files. For a hub that also watches its host:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-watchers.yml up -d --build
+```
+
+Omit the local-watchers overlay when separate edge agents already collect that machine's logs. Remove the setting or set `auto` to restore automatic window selection.
+
 ## What it does
 
-**Quota monitoring.** Reads your real subscription usage straight from the providers: Claude's 5-hour and 7-day windows (with per-model breakdown, e.g. a scoped Fable/Opus limit) via your claude.ai session or Claude Code's OAuth token, and ChatGPT/Codex rate-limit windows via your Codex CLI login. No API keys are spent to do this — it reads the same usage endpoints the official apps use.
+**Quota monitoring.** Reads your real subscription usage straight from the providers: Claude's reported session and 7-day windows (with per-model breakdown, e.g. a scoped Fable/Opus limit) via your claude.ai session or Claude Code's OAuth token, and ChatGPT/Codex rate-limit windows via your Codex CLI login. No API keys are spent to do this — it reads the same usage endpoints the official apps use.
+
+**Add-on credits.** Beyond the quota windows, the dashboard shows the money-like balances that kick in when a window runs out: Claude's prepaid credit balance and this month's extra usage, and Codex's credit balance. Cloud session promotional credits appear separately with their expiry.
 
 **Agent activity tracking.** A tiny hook script forwards every Claude Code lifecycle event (all 7 hook types) to the tracker, and a built-in watcher tails Codex CLI rollout logs. Every session, agent, subagent, tool call, and touched file lands in a local SQLite database and streams live into the UI over SSE.
 
@@ -51,7 +84,19 @@ An always-on Docker application, opened in any browser, that monitors your AI su
 
 ### Dashboard — quota at a glance
 
-Both providers side by side: Claude's 5-hour session window, 7-day window, and per-model scoped limits; OpenAI's 7-day window, per-feature limits, and available rate-limit resets. Cards auto-refresh every 60 s and can be refreshed manually.
+Provider cards show Claude's applicable session window (hidden in weekly-only mode), 7-day window, and per-model scoped limits; OpenAI's 7-day window, per-feature limits, and available rate-limit resets; and Grok Bot's saved weekly usage. Cards auto-refresh every 60 s; the Refresh button bypasses the 30 s server cache for upstream providers.
+
+**Add-on credits.** Each card can show what happens beyond the included quota:
+
+- **Claude — "Cloud session credits" section.** Included grant, remaining balance, usage percentage and expiry, read from the live provider response. Amounts are already in dollars; they are not converted from cents. A saved web session can fill missing cloud data when OAuth is used.
+- **Claude — limit resets.** Shows available reset tickets and their expiry beside the quota windows; hover over a ticket for its provider description.
+- **Claude — "Add-on credits" section.** The *prepaid balance*, plus *this month's extra usage*: spent, monthly cap, remaining and % used. It reads "no monthly cap" when uncapped and "Extra usage is off" when disabled, and an **Out of credits** pill appears when extra usage has hit its monthly spend limit (claude.ai's out-of-credits flag, or 100% of the cap) — it reflects the extra-usage cap, not the prepaid balance. The prepaid balance is only exposed by claude.ai, so it needs a claude.ai session key saved in Settings; extra usage works with Claude Code's OAuth token alone.
+- **OpenAI — Codex credits.** Read from the `credits` field of the Codex usage endpoint: "N credits", "Unlimited", or "Credits available", with a **Depleted** pill when the workspace's credits are depleted or its overage limit is reached.
+- **Monitor strip.** The same figures appear as a compact credit readout on each provider row (hidden on phones).
+
+If an upstream call fails, the card shows the real error alongside the last good data instead of falling back to "configure credentials". Upstream requests time out after 10 s.
+
+> These figures come from undocumented endpoints — the same ones the official Claude and Codex apps use — so they can change without notice.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -84,7 +129,7 @@ Since both providers here run flat subscriptions (cost $0), "top model" and the 
 ### Settings — credentials, display, data
 
 - **Hub** — the hub URL edge machines post to (`NEXT_PUBLIC_HUB_URL`), read-only: it's read from the running container's environment, not from the browser, so what you see is what the hub is actually configured with.
-- **Claude credentials** — paste a claude.ai session key, pick your organization; stored encrypted (AES-256-GCM) on disk. If you use Claude Code, the app can read its OAuth token from the macOS Keychain instead — zero setup.
+- **Claude credentials** — Claude quota works with only Claude Code's OAuth token (read from the macOS Keychain, zero setup); the session key is optional. Paste a claude.ai session key and pick your organization to also see the **prepaid credit balance** (claude.ai is the only place that exposes it). Stored encrypted (AES-256-GCM) on disk.
 - **Monitor display** — font-size ladder for the monitor panel with a live preview.
 - **Data management** — database size and row counts, age-based purge with an exact preview of what would be deleted (daily cost summaries are preserved), optional automatic retention (runs about once a day), and a full wipe.
 
@@ -119,7 +164,7 @@ flowchart TB
     UP["claude.ai + api.anthropic.com<br/>chatgpt.com usage endpoints"] <-->|"30s shared TTL cache"| API
 ```
 
-- **One server, many browsers.** The container serves the UI and the API on `:3789`; you open it in any browser on the tailnet. There is nothing to install per client, and no second database to reconcile. (An `electron/` shell exists in the tree from an earlier iteration and is no longer part of the product — see [Development](#development).)
+- **One server, many browsers.** The container serves the UI and the API on `:3789`; you open it in any browser on the tailnet. There is nothing to install per client, and no second database to reconcile.
 - **Other machines are edges, not clients.** A second machine runs its own watchers and posts batches to `POST /api/ingest/v1` with its `machine_id`; it doesn't run its own UI or DB. The Monitor and Analytics pages then scope to All or to a single machine.
 - **The SQLite DB lives in a Docker named volume** (`llm-tracker-data`) — never a macOS bind mount (see [Troubleshooting](#troubleshooting) for the WAL/mmap story). Use `npm run db:export` for a host-side snapshot.
 
@@ -153,7 +198,7 @@ docker compose -f docker-compose.yml -f docker-compose.local-watchers.yml up -d
 ```bash
 npm install
 npm run dev            # Next.js dev server (UI + API) on :3000
-npm test               # vitest — 194 tests
+npm test               # vitest — 338 tests
 ```
 
 > `better-sqlite3` is deliberately built for system Node everywhere (tests, dev, Docker). If it ever complains about `NODE_MODULE_VERSION`, run `npm rebuild better-sqlite3`.
@@ -200,8 +245,15 @@ One caveat: a `--resume`d session copies its inherited history into a new transc
 Zero setup if you use the Codex CLI:
 
 - **Quota** — the dashboard reads your ChatGPT/Codex rate-limit windows using the OAuth credentials in `~/.codex/auth.json`.
+- **Credits** — the same usage response carries your Codex credit balance, shown on the OpenAI card (see [Dashboard](#dashboard--quota-at-a-glance)).
 - **Activity** — the server tails `~/.codex/sessions/**/rollout-*.jsonl` (4-second tail of today's directory, full rescan once a minute, byte-offset cursors so nothing is re-read), converting Codex turns into the same sessions/agents/events model. In Docker, `~/.codex` is mounted read-only; tokens never leave the machine.
 - In analytics, Codex `exec` shell commands are classified by verb into explore vs. modify so the ratio stays honest across both providers.
+
+## Grok
+
+The Grok card reads the most recently modified blob whose decoded key ends in `.weekly-usage.cache` from Grok Bot's local `sand-client-persistence` directory. It shows included weekly usage and on-demand spend when available. The reading is saved only when Grok Bot fetches usage, so the card shows its actual age; reopen Grok Bot to refresh an old reading. Once the saved weekly reset passes, the card hides that outdated percentage.
+
+For Docker on the same Mac as Grok Bot, use the opt-in `docker-compose.local-watchers.yml` overlay. It mounts Grok Bot's cache read-only at `/grok-cache`; Grok Bot must be installed on the host. The directory also contains chat transcripts, but the tracker opens only blobs whose decoded key ends in `.weekly-usage.cache`.
 
 ## Multi-machine hub
 
@@ -225,6 +277,13 @@ docker compose up -d --build
 | `INGEST_TOKEN` | *(unset)* | Shared bearer token for `/api/ingest/v1`. **Unset means every ingest is refused with 503** — a hub on a tailnet must never accept anonymous writes. |
 | `NEXT_PUBLIC_HUB_URL` | `http://henrys-mac-mini:3789` | Where edge machines post. Env-only: no hostname is hardcoded in the app. |
 | `TZ` | `Asia/Phnom_Penh` | Day bucketing for `localtime` rollups. |
+| `CLAUDE_USAGE_WINDOW` | `auto` | Set `weekly` for a weekly/model-only Claude display. Session metrics remain available in the API. Read from `.env.local` in Docker. |
+| `CLAUDE_CODE_USER_AGENT` | `claude-code/2.0.32` | `User-Agent` sent with the Claude Code OAuth usage request. Override if Anthropic starts rejecting the default. |
+| `CLAUDE_WEB_USER_AGENT` | recent desktop Chrome UA | `User-Agent` sent with claude.ai session-key requests (usage, prepaid balance). Override if claude.ai starts rejecting it. |
+
+The two `*_USER_AGENT` variables are optional and read at request time. Docker loads them from `.env.local` via `env_file`.
+
+The UI and administrative APIs have no general login or authorization layer. Keep the hub on a controlled local network or behind an authenticated access proxy; the ingest bearer token protects only `/api/ingest/v1`. Runtime `.env.local`, encrypted credentials, databases and private deployment overrides are excluded from Git and Docker build context.
 
 Auth v1 is a shared bearer token over plain HTTP on the tailnet — Tailscale provides the transport security. No mTLS, and SQLite stays the single-writer store; a multi-replica VPS deployment would need Postgres instead.
 
@@ -302,10 +361,11 @@ All routes return `{ "success": true, "data": ... }` or `{ "success": false, "er
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/live` | GET | Zero-I/O liveness probe (used by the container HEALTHCHECK) |
-| `/api/health` | GET | Provider connectivity — verifies Claude + OpenAI upstream access (parallel, shares the usage cache) |
-| `/api/usage/claude` | GET | Claude quota windows + per-model breakdown (30 s server-side cache) |
-| `/api/usage/openai` | GET | ChatGPT/Codex quota windows (30 s server-side cache) |
-| `/api/organizations/claude` | GET | List organizations for a session key |
+| `/api/health` | GET | Provider connectivity — verifies Claude + OpenAI upstream access and local Grok cache. Each provider entry is `{ configured, connected, error?, code? }` |
+| `/api/usage/claude` | GET | Claude quota windows + per-model breakdown + cloud/prepaid/extra credits (30 s server-side cache; `?fresh=1` bypasses it) |
+| `/api/usage/openai` | GET | ChatGPT/Codex quota windows + credit balance (30 s server-side cache; `?fresh=1` bypasses it) |
+| `/api/usage/grok` | GET | Grok Bot's last locally saved weekly usage and on-demand spend |
+| `/api/organizations/claude` | POST | List organizations for a session key |
 | `/api/credentials` | GET/POST/DELETE | Encrypted credential storage (mutations invalidate the usage caches) |
 | `/api/monitor/stats` | GET | Header stats (`?provider`, `?machine`) |
 | `/api/monitor/agents` | GET/POST | List (`?limit`, `?status`, `?provider`, `?machine`) / register agents |
@@ -329,6 +389,10 @@ All routes return `{ "success": true, "data": ... }` or `{ "success": false, "er
 | `/api/analytics/files` | GET | Most-modified files and directories |
 | `/api/analytics/models` | GET | Per-model cost/token series |
 | `/api/analytics/insights` | GET | Heatmap, projects, streaks, explore-vs-modify |
+
+Claude usage includes nullable `session`, `weekly`, `modelBreakdown`, `cloudCredits`, `prepaidBalance` and `extraUsage`. Cloud credits expose `total`, `used`, `remaining`, `currency`, `percentage`, `expiresAt`, `expired` and `level`; a missing or malformed grant returns `null`. Weekly-only mode also returns `hideSessionWindow: true` without deleting reported session metrics.
+
+The usage routes report failures with a typed `error.code`: `MISSING_CREDENTIALS` (401, nothing configured), `AUTH_EXPIRED` (401, credentials rejected) or `FETCH_ERROR` (502, upstream failed or timed out after 10 s).
 
 Every `/api/analytics/*` route and the four monitor read routes above take the same optional `?provider=` and `?machine=` filters; omitting either leaves that axis unscoped.
 
@@ -368,6 +432,21 @@ Something rebuilt it for the wrong runtime. `npm rebuild better-sqlite3` restore
 **Hooks feel slow / events missing.**
 Verify the hub is up first: `curl http://127.0.0.1:3789/api/live`. If an old desktop build ever ran on this machine, delete its leftover port file — `rm "~/Library/Application Support/llm-usage-tracker/server-port"` — so the hook stops probing a port nothing listens on. The hook can be tested any time with `bash hooks/test-hook.sh`.
 
+**Claude card shows an error but keeps old numbers.**
+By design: a failed refresh shows the real error (`AUTH_EXPIRED`, `FETCH_ERROR`, …) over the last good data instead of resetting to "configure credentials". Hit Refresh to bypass the 30 s cache. If the upstream rejects the request outright, try overriding `CLAUDE_CODE_USER_AGENT` / `CLAUDE_WEB_USER_AGENT`.
+
+**Claude Ultra shows no five-hour bar.**
+Verified Ultra accounts have no five-hour limit. The tracker omits a session bucket with zero usage and no reset timestamp (including the placeholder still returned for Ultra), and the Monitor uses the weekly window instead. An unstarted session on other plans is also omitted until usage or a reset appears. Nonzero session usage or a reset timestamp keeps the five-hour bar visible in automatic mode. If your Ultra account still receives session metrics, set `CLAUDE_USAGE_WINDOW=weekly` in `.env.local` and recreate the container to show only weekly/model windows on the Dashboard and Monitor. The API retains session metrics and sets `hideSessionWindow: true`; this display preference does not change provider-enforced limits.
+
+**Cloud session credits.**
+The Claude card shows the included promotional cloud-session balance, total grant, usage and expiry separately from prepaid/extra usage. The Monitor summarizes available cloud credits first. These credits apply only to cloud sessions; once used or expired, regular plan usage applies. A saved claude.ai session key fills this balance when the OAuth endpoint omits it.
+
+**Claude card has no prepaid balance.**
+The balance is only available through claude.ai, so it needs a session key saved in Settings; the Claude Code OAuth token alone covers quota windows and extra usage but not the prepaid balance.
+
+**Claude card says "Claude Code sign-in expired".**
+The Keychain OAuth token has lapsed and there's no session key to fall back on. Run `claude` in a terminal to refresh the sign-in; the card picks it up within a minute or two, keeping the last numbers until then.
+
 **Claude card says "Session key expired".**
 Grab a fresh `sessionKey` cookie from claude.ai (DevTools → Application → Cookies) and paste it in Settings. If Claude Code is installed and logged in, the Keychain OAuth path usually makes this unnecessary.
 
@@ -378,9 +457,6 @@ Delete `.next/cache` and rebuild (`docker compose up -d --build` for the contain
 
 ```
 llm-usage-tracker/
-├── electron/                    # retired desktop shell — not part of the product, not built
-│                                #   by `npm run build`, kept only so the legacy
-│                                #   `npm run electron:*` scripts still resolve
 ├── hooks/
 │   ├── agent-monitor-hook.sh    # thin wrapper (keeps ~/.claude/settings.json stable)
 │   ├── agent-monitor-hook.py    # the actual hook: parse → discover ports → POST (one process)
@@ -418,7 +494,7 @@ llm-usage-tracker/
 ├── Dockerfile                   # multi-stage; standalone output; HEALTHCHECK /api/live
 ├── docker-compose.yml           # :3789, named volume, TZ/INGEST_TOKEN/NEXT_PUBLIC_HUB_URL passthrough
 ├── docker-compose.local-watchers.yml # overlay: also watch this host's ~/.codex + ~/.claude/projects
-└── package.json                 # scripts + deps (the electron-builder block is legacy)
+└── package.json                 # scripts + deps
 ```
 
 ## Development
@@ -426,14 +502,13 @@ llm-usage-tracker/
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Next.js dev server (UI + API + Codex watcher) |
-| `npm test` | vitest suite (194 tests: schema, queries, purge, providers, codex ingest, claude transcripts, provider/machine filters, throttles, SSE, edge↔hub ingest contract) |
+| `npm test` | vitest suite (338 tests: schema, queries, purge, providers, codex ingest, claude transcripts, provider/machine filters, throttles, SSE, edge↔hub ingest contract) |
 | `npm run test:edge` | edge shipper suite (`node --test`, no dependencies to install) |
+| `npx tsc --noEmit` | Typecheck (CI runs lint, typecheck, both test suites and a build) |
 | `npm run build` | Production build (standalone output + static assets) |
 | `npm run db:export` | Consistent DB snapshot out of the Docker volume |
 | `docker compose up -d --build` | Rebuild + restart the canonical tracker |
 | `bash hooks/test-hook.sh` | Fire one synthetic event of each hook type |
-
-The `electron:*` scripts and the `electron/` directory are a retired path: the product is the container plus a browser. They are left in place so an existing checkout keeps resolving, and nothing in `npm run build`, `npm test` or the Docker image depends on them.
 
 Style: TypeScript strict throughout; Tailwind (dark zinc theme); raw SQL with prepared statements (no ORM); DB functions synchronous by design (`better-sqlite3`); API responses always `{ success, data | error }`.
 

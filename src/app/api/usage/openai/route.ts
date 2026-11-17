@@ -1,44 +1,15 @@
 import { NextResponse } from "next/server";
-import { OpenAIClient } from "@/lib/providers/openai-client";
-import { openaiUsageCache } from "@/lib/providers/usage-cache";
+import { getOpenAIUsage } from "@/lib/providers/usage-service";
 import type { ApiResponse, OpenAIUsageData } from "@/types";
 
-export async function GET(): Promise<
-  NextResponse<ApiResponse<OpenAIUsageData>>
-> {
-  try {
-    const auth = OpenAIClient.readCodexAuth();
-    if (!auth) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "MISSING_CREDENTIALS",
-            message:
-              "Codex CLI login not found (~/.codex/auth.json). Run `codex login` to connect your ChatGPT account.",
-          },
-        },
-        { status: 401 }
-      );
-    }
-
-    const client = new OpenAIClient(auth.accessToken, auth.accountId);
-    const data = await openaiUsageCache.get("openai", () => client.fetchUsage());
-
-    return NextResponse.json({ success: true, data });
-  } catch (error) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: {
-          code: "FETCH_ERROR",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to fetch OpenAI usage",
-        },
-      },
-      { status: 500 }
-    );
-  }
+export async function GET(
+  request: Request
+): Promise<NextResponse<ApiResponse<OpenAIUsageData>>> {
+  const fresh = new URL(request.url).searchParams.get("fresh") === "1";
+  const result = await getOpenAIUsage({ fresh });
+  if (result.ok) return NextResponse.json({ success: true, data: result.data });
+  return NextResponse.json(
+    { success: false, error: { code: result.code, message: result.message } },
+    { status: result.status }
+  );
 }

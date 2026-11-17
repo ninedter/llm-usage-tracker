@@ -28,7 +28,7 @@ body {
   color: var(--foreground);
 }
 
-/* Electron window drag regions */
+/* Window drag regions — only take effect when installed as a desktop web app */
 .titlebar-drag {
   -webkit-app-region: drag;
 }

@@ -24,13 +24,19 @@ function getEncryptionKey(): string {
   return key;
 }
 
+// Decrypted store memo: usage/health routes read credentials on every poll, so
+// avoid re-reading + decrypting the file each time. Only this module writes it.
+let memo: CredentialStore | null = null;
+
 export function getCredentials(): CredentialStore {
+  if (memo) return structuredClone(memo);
   if (!existsSync(CRED_FILE)) return {};
 
   try {
     const raw = readFileSync(CRED_FILE, "utf8");
     const decrypted = decrypt(raw, getEncryptionKey());
-    return JSON.parse(decrypted);
+    memo = JSON.parse(decrypted) as CredentialStore;
+    return structuredClone(memo);
   } catch {
     return {};
   }
@@ -40,6 +46,7 @@ export function saveCredentials(store: CredentialStore): void {
   const json = JSON.stringify(store);
   const encrypted = encrypt(json, getEncryptionKey());
   writeFileSync(CRED_FILE, encrypted);
+  memo = structuredClone(store);
 }
 
 export function deleteCredentials(provider: keyof CredentialStore): void {

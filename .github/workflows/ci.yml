@@ -20,4 +20,10 @@ jobs:
 
       - run: npm run lint
 
+      - run: npx tsc --noEmit
+
       - run: npm test
+
+      - run: npm run test:edge
+
+      - run: npm run build

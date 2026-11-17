@@ -1,5 +1,5 @@
-// Next.js instrumentation hook — runs once when the server process boots, in
-// both the Electron-wrapped standalone server and the Docker container.
+// Next.js instrumentation hook — runs once when the server process boots
+// (`next dev` and the Docker container alike).
 //
 // This is what makes Codex/OpenAI activity show up at all: it backfills recent
 // ~/.codex rollout logs, then tails them for new events. The Claude watcher is

@@ -21,6 +21,12 @@ export const PROVIDER_INFO: Record<
     bgColor: "bg-emerald-50 dark:bg-emerald-950/20",
     consoleUrl: "https://chatgpt.com/",
   },
+  grok: {
+    displayName: "Grok (Grok Bot)",
+    color: "#8B8BF5",
+    bgColor: "bg-indigo-50 dark:bg-indigo-950/20",
+    consoleUrl: "https://grok.com/",
+  },
 };
 
 export const USAGE_THRESHOLDS = {
@@ -32,6 +38,9 @@ export const REFRESH_INTERVALS = {
   usage: 60_000,
   billing: 300_000,
 } as const;
+
+// Hard cap on every upstream (claude.ai / api.anthropic.com / chatgpt.com) request
+export const UPSTREAM_TIMEOUT_MS = 10_000;
 
 export const ARCHIVE_AFTER_MS = 30 * 60 * 1000; // 30 minutes
 
