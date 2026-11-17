@@ -1,4 +1,4 @@
-import type { ClaudeUsageData, OpenAIUsageData, UsageLevel, UsageWindow } from "@/types";
+import type { ClaudeUsageData, GrokUsageData, OpenAIUsageData, UsageLevel, UsageWindow } from "@/types";
 
 // Claude's plan windows aren't self-describing (the API gives us fixed
 // session/weekly fields), so their lengths live here. OpenAI's come from the
@@ -44,7 +44,7 @@ function toStripWindow(w: UsageWindow, windowSeconds: number): StripWindow {
  */
 export function claudeShortestWindow(data: ClaudeUsageData): StripWindow | null {
   const candidates: StripWindow[] = [];
-  if (data.session) candidates.push(toStripWindow(data.session, CLAUDE_SESSION_WINDOW_SECONDS));
+  if (data.session && !data.hideSessionWindow) candidates.push(toStripWindow(data.session, CLAUDE_SESSION_WINDOW_SECONDS));
   if (data.weekly) candidates.push(toStripWindow(data.weekly, CLAUDE_WEEKLY_WINDOW_SECONDS));
   return pickShortest(candidates);
 }
@@ -65,4 +65,8 @@ export function openaiShortestWindow(data: OpenAIUsageData): StripWindow | null 
       resetTime: w.resetTime,
     }));
   return pickShortest(candidates);
+}
+
+export function grokWeeklyWindow(data: GrokUsageData): StripWindow | null {
+  return data.weekly ? toStripWindow(data.weekly, 7 * 86400) : null;
 }

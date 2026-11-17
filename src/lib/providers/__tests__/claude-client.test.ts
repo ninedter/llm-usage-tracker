@@ -38,16 +38,120 @@ afterEach(() => {
   Object.defineProperty(process, "platform", realPlatform);
   vi.unstubAllGlobals();
   ClaudeClient.invalidateTokenCache();
+  vi.unstubAllEnvs();
 });
 
 describe("ClaudeClient.fetchUsage", () => {
+  it("requests cedar_ember with the CLI User-Agent on OAuth", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockImplementation(async () => json({ ...USAGE, cedar_ember: { eligible: true, grants: [] } }));
+    await new ClaudeClient(null).fetchUsage();
+    expect(urls()).toEqual(["https://api.anthropic.com/api/oauth/usage?cedar_ember=1"]);
+    expect(fetchMock.mock.calls[0][1].headers["User-Agent"]).toBe("claude-cli/2.1.326 (external, cli)");
+
+    vi.stubEnv("CLAUDE_CODE_USER_AGENT", "custom-cli/1");
+    await ClaudeClient.fetchOAuthUsage(OAUTH_TOKEN);
+    expect(fetchMock.mock.calls[1][1].headers["User-Agent"]).toBe("custom-cli/1");
+  });
+
+  it("requests cedar_ember on the session usage path", async () => {
+    execMock.mockRejectedValue(new Error("no keychain item"));
+    fetchMock.mockImplementation(async (url: string) =>
+      url.endsWith("/usage?cedar_ember=1") ? json(USAGE) : json({}, 404)
+    );
+    await new ClaudeClient(SESSION).fetchUsage();
+    expect(urls().filter((url) => url.includes("/usage?")))
+      .toEqual(["https://claude.ai/api/organizations/org-1/usage?cedar_ember=1"]);
+  });
+
+  it("fills an ineligible OAuth reset block and cloud credits with one web usage request", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("api.anthropic.com")) return json({
+        ...USAGE, cedar_ember: { eligible: false, ineligible_reason: "surface", grants: [] },
+      });
+      if (url.endsWith("/usage?cedar_ember=1")) return json({
+        five_hour: { utilization: 99 },
+        iguana_necktie: { limit_dollars: 10, remaining_dollars: 5 },
+        cedar_ember: { eligible: true, grants: [
+          { id: "reset", resets_left: 1, clears: ["seven_day"], ends_at: "2099-01-01T00:00:00Z" },
+        ] },
+      });
+      return json({}, 404);
+    });
+    const data = await new ClaudeClient(SESSION).fetchUsage();
+    expect(data.session?.percentage).toBe(12);
+    expect(data.cloudCredits?.remaining).toBe(5);
+    expect(data.resetCreditsAvailable).toBe(1);
+    expect(urls().filter((url) => url.endsWith("/usage?cedar_ember=1"))).toHaveLength(2);
+  });
+
+  it("preserves an eligible OAuth reset block while filling only missing cloud credits", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("api.anthropic.com")) return json({ ...USAGE,
+        cedar_ember: { eligible: true, grants: [
+          { id: "oauth", resets_left: 1, clears: ["seven_day"] },
+        ] },
+      });
+      if (url.endsWith("/usage?cedar_ember=1")) return json({
+        iguana_necktie: { limit_dollars: 10, remaining_dollars: 5 },
+        cedar_ember: { eligible: true, grants: [
+          { id: "web", resets_left: 2, clears: ["seven_day"] },
+        ] },
+      });
+      return json({}, 404);
+    });
+    const data = await new ClaudeClient(SESSION).fetchUsage();
+    expect(data.resetCredits.map((credit) => credit.id)).toEqual(["oauth"]);
+    expect(data.cloudCredits?.remaining).toBe(5);
+    expect(urls().filter((url) => url.endsWith("/usage?cedar_ember=1"))).toHaveLength(2);
+  });
+
+  it("does not fetch web usage when OAuth has both credit blocks", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes("api.anthropic.com") ? json({ ...USAGE,
+        iguana_necktie: { limit_dollars: 10, remaining_dollars: 5 },
+        cedar_ember: { eligible: true, grants: [] },
+      }) : json({}, 404)
+    );
+    await new ClaudeClient(SESSION).fetchUsage();
+    expect(urls().filter((url) => url.includes("/usage?"))).toHaveLength(1);
+  });
+
+  it("fills session-only cloud credits while retaining OAuth quota data", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === "https://api.anthropic.com/api/oauth/usage?cedar_ember=1") return json(USAGE);
+      if (url.endsWith("/usage?cedar_ember=1")) return json({
+        five_hour: { utilization: 99 },
+        iguana_necktie: { limit_dollars: 250, remaining_dollars: 93.073258 },
+      });
+      return json({}, 404);
+    });
+    const data = await new ClaudeClient(SESSION).fetchUsage();
+    expect(data.session?.percentage).toBe(12);
+    expect(data.cloudCredits).toMatchObject({ total: 250, remaining: 93.073258 });
+  });
+
+  it("keeps OAuth usage when the cloud-credit fallback fails", async () => {
+    execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
+    fetchMock.mockImplementation(async (url: string) =>
+      url === "https://api.anthropic.com/api/oauth/usage?cedar_ember=1" ? json(USAGE) : json({}, 503)
+    );
+    const data = await new ClaudeClient(SESSION).fetchUsage();
+    expect(data.session?.percentage).toBe(12);
+    expect(data.cloudCredits).toBeNull();
+  });
+
   it("OAuth-only: no session -> no claude.ai calls, prepaidBalance null", async () => {
     execMock.mockReturnValue(keychain({ accessToken: OAUTH_TOKEN }));
     fetchMock.mockResolvedValue(json(USAGE));
 
     const data = await new ClaudeClient(null).fetchUsage();
 
-    expect(urls()).toEqual(["https://api.anthropic.com/api/oauth/usage"]);
+    expect(urls()).toEqual(["https://api.anthropic.com/api/oauth/usage?cedar_ember=1"]);
     expect(urls().some((u) => u.includes("claude.ai"))).toBe(false);
     expect(data.prepaidBalance).toBeNull();
   });
@@ -121,8 +225,8 @@ describe("ClaudeClient.fetchUsage", () => {
 
     const data = await new ClaudeClient(SESSION).fetchUsage();
 
-    expect(data.session.percentage).toBe(12);
-    expect(urls()).toContain("https://claude.ai/api/organizations/org-1/usage");
+    expect(data.session?.percentage).toBe(12);
+    expect(urls()).toContain("https://claude.ai/api/organizations/org-1/usage?cedar_ember=1");
     expect(suspect).toHaveBeenCalledTimes(1);
     suspect.mockRestore();
   });

@@ -6,9 +6,10 @@ import { ProviderCard } from "@/components/dashboard/ProviderCard";
 import { UsageBar } from "@/components/dashboard/UsageBar";
 import { UsageStat } from "@/components/dashboard/UsageStat";
 import { CreditSection } from "@/components/dashboard/CreditSection";
+import { ResetCredits } from "@/components/dashboard/ResetCredits";
 import { CardSkeleton } from "@/components/ui/Skeleton";
 import { formatMoney } from "@/lib/format";
-import type { ClaudeExtraUsage, MoneyAmount } from "@/types";
+import type { ClaudeCloudCredits, ClaudeExtraUsage, MoneyAmount } from "@/types";
 
 export function ClaudeCard() {
   const { data, error, isLoading } = useClaudeUsage();
@@ -46,12 +47,14 @@ export function ClaudeCard() {
     >
       {data && (
         <>
-          <UsageBar
-            label="5-Hour Window"
-            percentage={data.session.percentage}
-            level={data.session.level}
-            resetTime={data.session.resetTime}
-          />
+          {data.session && !data.hideSessionWindow && (
+            <UsageBar
+              label="5-Hour Window"
+              percentage={data.session.percentage}
+              level={data.session.level}
+              resetTime={data.session.resetTime}
+            />
+          )}
           <UsageBar
             label="7-Day Window"
             percentage={data.weekly.percentage}
@@ -76,6 +79,12 @@ export function ClaudeCard() {
             </div>
           )}
 
+          {data.resetCreditsAvailable != null && (
+            <ResetCredits available={data.resetCreditsAvailable} credits={data.resetCredits} noun="limit reset" />
+          )}
+
+          {data.cloudCredits && <CloudSessionCredits credit={data.cloudCredits} />}
+
           {(data.extraUsage || data.prepaidBalance) && (
             <ClaudeCredits extraUsage={data.extraUsage} prepaidBalance={data.prepaidBalance} />
           )}
@@ -86,6 +95,30 @@ export function ClaudeCard() {
         </>
       )}
     </ProviderCard>
+  );
+}
+
+function CloudSessionCredits({ credit: c }: { credit: ClaudeCloudCredits }) {
+  const expired = c.expired;
+  return (
+    <CreditSection title="Cloud session credits" alert={expired ? "Expired" : c.remaining === 0 ? "Used up" : undefined}>
+      <UsageBar label="Included credit" percentage={c.percentage} level={c.level} />
+      <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        {formatMoney(c.remaining, c.currency)} of {formatMoney(c.total, c.currency)} left
+      </p>
+      {c.expiresAt && (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          {expired ? "Expired" : "Expires"}{" "}
+          {new Intl.DateTimeFormat(undefined, {
+            month: "long", day: "numeric", year: "numeric",
+            hour: "numeric", minute: "2-digit", timeZoneName: "short",
+          }).format(new Date(c.expiresAt))}
+        </p>
+      )}
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Applies automatically to cloud sessions. After it is used or expires, your plan’s regular usage applies.
+      </p>
+    </CreditSection>
   );
 }
 

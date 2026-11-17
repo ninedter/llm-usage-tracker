@@ -39,9 +39,8 @@ credentials.enc.json
 # vercel
 .vercel
 
-# electron
+# leftover output of the removed desktop build
 /dist-electron/
-electron/*.js
 
 # typescript
 *.tsbuildinfo

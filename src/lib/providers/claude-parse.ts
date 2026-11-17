@@ -1,4 +1,4 @@
-import type { ClaudeExtraUsage, ClaudeUsageData, MoneyAmount } from "@/types";
+import type { ClaudeCloudCredits, ClaudeExtraUsage, ClaudeUsageData, MoneyAmount, ResetCredit } from "@/types";
 import { getUsageLevel } from "../constants";
 
 // Pure parsing for Claude usage payloads, kept free of fetch/Keychain so the
@@ -53,7 +53,11 @@ export interface ClaudeSpendLimitRaw {
 }
 
 export interface ClaudeUsageResponse {
-  five_hour?: UsageBucket;
+  cedar_ember?: ClaudeCedarEmberRaw | null;
+  // Observed cloud-session promotional credit bucket. Amounts are DOLLARS,
+  // unlike the cents returned by the prepaid and extra-usage endpoints.
+  iguana_necktie?: ClaudeCloudCreditsRaw | null;
+  five_hour?: UsageBucket | null;
   seven_day?: UsageBucket;
   seven_day_opus?: UsageBucket | null;
   seven_day_sonnet?: UsageBucket | null;
@@ -63,6 +67,101 @@ export interface ClaudeUsageResponse {
   // Legacy field names (kept for backwards compat)
   session_usage_percent?: number;
   weekly_usage_percent?: number;
+}
+
+export interface ClaudeCedarEmberRaw {
+  eligible?: boolean | null;
+  ineligible_reason?: string | null;
+  grants?: ClaudeResetGrantRaw[] | null;
+}
+
+export interface ClaudeResetGrantRaw {
+  id?: unknown;
+  label?: unknown;
+  resets_left?: unknown;
+  ends_at?: unknown;
+  clears?: unknown;
+  paused?: unknown;
+}
+
+export function parseResetCredits(
+  raw: unknown,
+  opts: { limits?: UsageLimit[] | null; fiveHour?: UsageBucket | null } = {}
+): { resetCreditsAvailable: number | null; resetCredits: ResetCredit[] } {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { resetCreditsAvailable: null, resetCredits: [] };
+  }
+  const block = raw as ClaudeCedarEmberRaw;
+  const modelNames = new Set(
+    (Array.isArray(opts.limits) ? opts.limits : [])
+      .map((limit) => limit?.scope?.model?.display_name)
+      .map((name) => typeof name === "string" ? name.trim() : "")
+      .filter((name): name is string => !!name)
+  );
+  const modelName = modelNames.size === 1 ? [...modelNames][0] : "Model";
+  const liveFiveHour = opts.fiveHour != null &&
+    ((opts.fiveHour.utilization ?? 0) > 0 || opts.fiveHour.resets_at != null);
+  const now = Date.now();
+  const resetCredits: ResetCredit[] = [];
+  let available = 0;
+
+  for (const grant of Array.isArray(block.grants) ? block.grants : []) {
+    if (grant == null || typeof grant !== "object" || Array.isArray(grant)) continue;
+    const item = grant as ClaudeResetGrantRaw;
+    const left = num(item.resets_left);
+    if (typeof item.id !== "string" || !item.id.trim() ||
+        left == null || !Number.isSafeInteger(left) || left <= 0 || item.paused === true) continue;
+    const expiresAt = typeof item.ends_at === "string" &&
+      Number.isFinite(Date.parse(item.ends_at)) ? item.ends_at : null;
+    if (expiresAt != null && Date.parse(expiresAt) <= now) continue;
+
+    const clears = Array.isArray(item.clears)
+      ? item.clears.filter((bucket): bucket is string => typeof bucket === "string") : [];
+    let title = "Limit reset";
+    if (clears.includes("seven_day")) {
+      title = liveFiveHour && !clears.includes("five_hour") ? "Weekly reset" : "Full reset";
+    } else if (clears.length > 0 && clears.every((bucket) => bucket !== "five_hour")) {
+      title = `${modelName} reset`;
+    } else if (clears.length === 1 && clears[0] === "five_hour") {
+      title = "5-hour reset";
+    }
+    if (left > 1) title += ` ×${left}`;
+    const detail = typeof item.label === "string" ? item.label.trim() : "";
+    resetCredits.push({ id: item.id.trim(), title, ...(detail ? { detail } : {}), expiresAt });
+    available += left;
+  }
+  resetCredits.sort((a, b) =>
+    (a.expiresAt == null ? Infinity : Date.parse(a.expiresAt)) -
+    (b.expiresAt == null ? Infinity : Date.parse(b.expiresAt))
+  );
+  return {
+    resetCreditsAvailable: block.eligible !== true && resetCredits.length === 0 ? null : available,
+    resetCredits,
+  };
+}
+
+export interface ClaudeCloudCreditsRaw {
+  limit_dollars?: RawNumber;
+  used_dollars?: RawNumber;
+  remaining_dollars?: RawNumber;
+  utilization?: RawNumber;
+  resets_at?: string | null; // the promotional credit's expiry
+}
+
+export function parseCloudCredits(raw: ClaudeCloudCreditsRaw | null | undefined): ClaudeCloudCredits | null {
+  if (!raw) return null;
+  const total = num(raw.limit_dollars);
+  const remaining = num(raw.remaining_dollars);
+  if (total == null || total <= 0 || remaining == null || remaining < 0 || remaining > total) return null;
+  const used = num(raw.used_dollars) ?? total - remaining;
+  if (used < 0 || used > total) return null;
+  const percentage = Math.min(100, Math.max(0, num(raw.utilization) ?? used / total * 100));
+  const expiresAt = raw.resets_at && Number.isFinite(Date.parse(raw.resets_at)) ? raw.resets_at : null;
+  return {
+    total, used, remaining, currency: "USD", percentage, expiresAt,
+    expired: expiresAt != null && Date.parse(expiresAt) <= Date.now(),
+    level: getUsageLevel(percentage),
+  };
 }
 
 // Upstream sometimes serializes amounts as numeric strings ("5000"); accept
@@ -123,6 +222,7 @@ export function parseClaudeUsage(
   usage: ClaudeUsageResponse,
   extras?: { prepaid?: ClaudePrepaidRaw | null; spendLimit?: ClaudeSpendLimitRaw | null }
 ): ClaudeUsageData {
+  const resets = parseResetCredits(usage.cedar_ember, { limits: usage.limits, fiveHour: usage.five_hour });
   // New format: five_hour.utilization (0-100), seven_day.utilization (0-100)
   const fiveHourUtil = usage.five_hour?.utilization;
   const sevenDayUtil = usage.seven_day?.utilization;
@@ -186,13 +286,16 @@ export function parseClaudeUsage(
   }
 
   return {
-    session: {
+    // Verified Ultra accounts can still receive a zeroed five_hour placeholder.
+    // No reset and no usage is not evidence of a live five-hour window. This
+    // also omits an unstarted session on other plans until usage/reset appears.
+    session: sessionPct > 0 || fiveHourReset != null ? {
       tokensUsed: 0,
       tokenLimit: 0,
       percentage: sessionPct,
       resetTime: fiveHourReset,
       level: getUsageLevel(sessionPct),
-    },
+    } : null,
     weekly: {
       tokensUsed: 0,
       tokenLimit: 0,
@@ -203,6 +306,8 @@ export function parseClaudeUsage(
     modelBreakdown,
     extraUsage: parseExtraUsage(usage.extra_usage, extras?.spendLimit),
     prepaidBalance: parsePrepaid(extras?.prepaid),
+    cloudCredits: parseCloudCredits(usage.iguana_necktie),
+    ...resets,
     lastUpdated: new Date().toISOString(),
   };
 }

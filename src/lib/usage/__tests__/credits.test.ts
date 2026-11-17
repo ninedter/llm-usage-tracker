@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { claudeCreditSummary, openaiCreditSummary } from "@/lib/usage/credits";
+import { claudeCreditSummary, grokCreditSummary, hasAvailableCloudCredits, openaiCreditSummary } from "@/lib/usage/credits";
 import type {
   ClaudeExtraUsage,
   ClaudeUsageData,
+  GrokUsageData,
   OpenAICredits,
   OpenAIUsageData,
   UsageWindow,
@@ -34,6 +35,9 @@ const claude = (over: Partial<ClaudeUsageData>): ClaudeUsageData => ({
   modelBreakdown: [],
   extraUsage: null,
   prepaidBalance: null,
+  cloudCredits: null,
+  resetCreditsAvailable: null,
+  resetCredits: [],
   lastUpdated: "",
   ...over,
 });
@@ -53,6 +57,23 @@ const openai = (
 });
 
 describe("claudeCreditSummary", () => {
+  it("shows available cloud credits ahead of a zero prepaid balance", () => {
+    const d = claude({
+      prepaidBalance: { amount: 0, currency: "USD" },
+      cloudCredits: { expired: false, total: 250, used: 156.93, remaining: 93.07, currency: "USD",
+        percentage: 62.77, expiresAt: "2099-11-05T07:59:00Z", level: "safe" },
+    });
+    expect(claudeCreditSummary(d)).toBe("Cloud $93.07 left");
+    expect(hasAvailableCloudCredits(d)).toBe(true);
+    d.cloudCredits!.expiresAt = "2000-11-05T07:59:00Z";
+    d.cloudCredits!.expired = true;
+    expect(hasAvailableCloudCredits(d)).toBe(false);
+    expect(claudeCreditSummary(d)).toBe("$0.00 left");
+    d.cloudCredits!.expiresAt = null;
+    d.cloudCredits!.remaining = 0;
+    expect(hasAvailableCloudCredits(d)).toBe(false);
+  });
+
   it("prefers the prepaid balance", () => {
     const d = claude({
       prepaidBalance: { amount: 12.34, currency: "USD" },
@@ -127,5 +148,17 @@ describe("openaiCreditSummary", () => {
 
   it("returns null when there is no credits object", () => {
     expect(openaiCreditSummary(openai(null))).toBeNull();
+  });
+});
+
+describe("grokCreditSummary", () => {
+  const grok = (onDemand: GrokUsageData["onDemand"]): GrokUsageData => ({
+    planName: "", planLabel: "", weekly: null, windowReset: false, isTrial: false,
+    onDemand, readAt: "", stale: false, lastUpdated: "",
+  });
+  it("shows remaining capped spend and uncapped spend", () => {
+    expect(grokCreditSummary(grok({ used: 1.25, limit: 10, currency: "USD" }))).toMatch(/8.75.*left/);
+    expect(grokCreditSummary(grok({ used: 1.25, limit: null, currency: "USD" }))).toMatch(/1.25.*spent/);
+    expect(grokCreditSummary(grok(null))).toBeNull();
   });
 });

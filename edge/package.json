@@ -12,7 +12,7 @@
   },
   "scripts": {
     "start": "node bin/llm-edge.js start",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "dependencies": {},
   "devDependencies": {}

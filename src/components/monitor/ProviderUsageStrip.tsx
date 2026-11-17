@@ -1,10 +1,11 @@
 "use client";
 
-import { useClaudeUsage, useOpenAIUsage } from "@/hooks/use-usage-data";
+import { useClaudeUsage, useGrokUsage, useOpenAIUsage } from "@/hooks/use-usage-data";
 import { PROVIDER_INFO } from "@/lib/constants";
-import { claudeCreditSummary, openaiCreditSummary } from "@/lib/usage/credits";
+import { claudeCreditSummary, grokCreditSummary, hasAvailableCloudCredits, openaiCreditSummary } from "@/lib/usage/credits";
 import {
   claudeShortestWindow,
+  grokWeeklyWindow,
   openaiShortestWindow,
   type StripWindow,
 } from "@/lib/usage/windows";
@@ -25,16 +26,18 @@ const BAR_COLORS: Record<UsageLevel, string> = {
 export function ProviderUsageStrip() {
   const { data: claude } = useClaudeUsage();
   const { data: openai } = useOpenAIUsage();
+  const { data: grok } = useGrokUsage();
 
   const rows: StripRowData[] = [];
   const claudeWindow = claude ? claudeShortestWindow(claude) : null;
   const openaiWindow = openai ? openaiShortestWindow(openai) : null;
+  const grokWindow = grok ? grokWeeklyWindow(grok) : null;
   if (claude && claudeWindow) {
     rows.push({
       id: "claude",
       window: claudeWindow,
       credit: claudeCreditSummary(claude),
-      creditAlert: !!claude.extraUsage?.outOfCredits,
+      creditAlert: !hasAvailableCloudCredits(claude) && !!claude.extraUsage?.outOfCredits,
     });
   }
   if (openai && openaiWindow) {
@@ -43,6 +46,14 @@ export function ProviderUsageStrip() {
       window: openaiWindow,
       credit: openaiCreditSummary(openai),
       creditAlert: openai.creditsDepleted,
+    });
+  }
+  if (grok && grokWindow) {
+    rows.push({
+      id: "grok",
+      window: grokWindow,
+      credit: grokCreditSummary(grok),
+      creditAlert: false,
     });
   }
 
@@ -104,6 +115,7 @@ function StripRow({ row, showCredits }: { row: StripRowData; showCredits: boolea
       </span>
       {showCredits && (
         <span
+          title={row.credit ?? undefined}
           className={`hidden w-28 flex-shrink-0 truncate text-right text-xs tabular-nums sm:block ${
             row.creditAlert
               ? "text-red-600 dark:text-red-400"

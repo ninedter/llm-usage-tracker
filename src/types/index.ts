@@ -1,4 +1,4 @@
-export type ProviderId = "claude" | "openai";
+export type ProviderId = "claude" | "openai" | "grok";
 
 export type UsageLevel = "safe" | "moderate" | "critical";
 
@@ -56,12 +56,27 @@ export interface ClaudeExtraUsage {
 // --- Provider-specific Usage ---
 
 export interface ClaudeUsageData {
-  session: UsageWindow;
+  session: UsageWindow | null; // null when no active session window is reported
+  hideSessionWindow?: boolean; // display preference; upstream session metrics are retained
   weekly: UsageWindow;
   modelBreakdown: ModelUsage[];
   extraUsage: ClaudeExtraUsage | null;
   prepaidBalance: MoneyAmount | null;
+  cloudCredits: ClaudeCloudCredits | null;
+  resetCreditsAvailable: number | null;
+  resetCredits: ResetCredit[];
   lastUpdated: string;
+}
+
+export interface ClaudeCloudCredits {
+  expired: boolean;
+  total: number;
+  used: number;
+  remaining: number;
+  currency: string;
+  percentage: number; // used, 0-100
+  expiresAt: string | null;
+  level: UsageLevel;
 }
 
 // Rate-limit windows vary by plan (some have only a weekly window,
@@ -75,12 +90,15 @@ export interface OpenAIRateWindow {
   level: UsageLevel;
 }
 
-// A granted rate-limit reset credit (spent to clear a hit limit early)
-export interface OpenAIResetCredit {
+// A granted limit reset (spent to clear a hit limit early)
+export interface ResetCredit {
   id: string;
   title: string;
+  detail?: string;
   expiresAt: string | null;
 }
+
+export type OpenAIResetCredit = ResetCredit;
 
 export interface OpenAICredits {
   hasCredits: boolean;
@@ -97,6 +115,18 @@ export interface OpenAIUsageData {
   resetCredits: OpenAIResetCredit[];
   credits: OpenAICredits | null; // null when wham/usage has no credits object
   creditsDepleted: boolean; // rate_limit_reached_type ends with "credits_depleted"
+  lastUpdated: string;
+}
+
+export interface GrokUsageData {
+  planName: string;
+  planLabel: string;
+  weekly: UsageWindow | null;
+  windowReset: boolean;
+  isTrial: boolean;
+  onDemand: { used: number; limit: number | null; currency: string } | null;
+  readAt: string;
+  stale: boolean;
   lastUpdated: string;
 }
 
@@ -121,6 +151,7 @@ export interface ProviderHealthEntry {
 export interface ProviderHealth {
   claude: ProviderHealthEntry;
   openai: ProviderHealthEntry;
+  grok: ProviderHealthEntry;
 }
 
 // --- Agent Monitor ---

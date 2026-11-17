@@ -1,12 +1,22 @@
 import { formatCredits, formatMoney } from "@/lib/format";
-import type { ClaudeUsageData, OpenAIUsageData } from "@/types";
+import type { ClaudeUsageData, GrokUsageData, OpenAIUsageData } from "@/types";
+
+export function hasAvailableCloudCredits(d: ClaudeUsageData): boolean {
+  const c = d.cloudCredits;
+  return !!c && c.remaining > 0 && !c.expired;
+}
 
 /**
  * One-line add-on credit summary for compact views (the Monitor strip).
- * Prepaid balance wins because it's real money already on the account;
+ * Active cloud credits win because they pay for cloud sessions first;
+ * otherwise prepaid balance wins because it's real money on the account.
  * capped extra usage shows headroom; uncapped extra usage can only show spend.
  */
 export function claudeCreditSummary(d: ClaudeUsageData): string | null {
+  const cloud = d.cloudCredits;
+  if (cloud && hasAvailableCloudCredits(d)) {
+    return `Cloud ${formatMoney(cloud.remaining, cloud.currency)} left`;
+  }
   if (d.prepaidBalance) {
     return `${formatMoney(d.prepaidBalance.amount, d.prepaidBalance.currency)} left`;
   }
@@ -30,4 +40,12 @@ export function openaiCreditSummary(d: OpenAIUsageData): string | null {
   }
   if (d.creditsDepleted) return "Credits depleted";
   return null;
+}
+
+export function grokCreditSummary(d: GrokUsageData): string | null {
+  const credit = d.onDemand;
+  if (!credit) return null;
+  return credit.limit === null
+    ? `${formatMoney(credit.used, credit.currency)} spent`
+    : `${formatMoney(Math.max(0, credit.limit - credit.used), credit.currency)} left`;
 }

@@ -10,7 +10,7 @@ export default function Home() {
   // needs no viewport cap.
   return (
     <div className="mx-auto w-full px-4 pb-8">
-      {/* Header — draggable for Electron window movement */}
+      {/* Header */}
       <div className="titlebar-drag mb-4 flex flex-wrap items-center justify-between gap-y-2 pt-2">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">

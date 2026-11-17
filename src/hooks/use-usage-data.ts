@@ -4,6 +4,7 @@ import useSWR, { mutate, type SWRConfiguration } from "swr";
 import type {
   ApiResponse,
   ClaudeUsageData,
+  GrokUsageData,
   OpenAIUsageData,
   ProviderHealth,
 } from "@/types";
@@ -12,6 +13,7 @@ import { scheduleRetry, usageRetryDelay } from "@/lib/usage/retry-delay";
 
 const CLAUDE_USAGE_KEY = "/api/usage/claude";
 const OPENAI_USAGE_KEY = "/api/usage/openai";
+const GROK_USAGE_KEY = "/api/usage/grok";
 const HEALTH_KEY = "/api/health";
 
 /** Fetch failure carrying the route's error code (e.g. MISSING_CREDENTIALS). */
@@ -73,6 +75,10 @@ export function useOpenAIUsage() {
   return useSWR<OpenAIUsageData, UsageFetchError>(OPENAI_USAGE_KEY, fetcher, usageConfig);
 }
 
+export function useGrokUsage() {
+  return useSWR<GrokUsageData, UsageFetchError>(GROK_USAGE_KEY, fetcher, usageConfig);
+}
+
 export function useHealth() {
   return useSWR<ProviderHealth, UsageFetchError>(HEALTH_KEY, fetcher, {
     refreshInterval: REFRESH_INTERVALS.billing,
@@ -88,7 +94,7 @@ export function useHealth() {
  */
 export async function refreshUsage(): Promise<void> {
   await Promise.allSettled([
-    ...[CLAUDE_USAGE_KEY, OPENAI_USAGE_KEY].map((key) =>
+    ...[CLAUDE_USAGE_KEY, OPENAI_USAGE_KEY, GROK_USAGE_KEY].map((key) =>
       mutate(key, fetcher(`${key}?fresh=1`))
     ),
     mutate(HEALTH_KEY),

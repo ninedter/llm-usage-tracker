@@ -21,6 +21,12 @@ export const PROVIDER_INFO: Record<
     bgColor: "bg-emerald-50 dark:bg-emerald-950/20",
     consoleUrl: "https://chatgpt.com/",
   },
+  grok: {
+    displayName: "Grok (Grok Bot)",
+    color: "#8B8BF5",
+    bgColor: "bg-indigo-50 dark:bg-indigo-950/20",
+    consoleUrl: "https://grok.com/",
+  },
 };
 
 export const USAGE_THRESHOLDS = {

@@ -14,3 +14,6 @@ services:
       # Claude Code transcripts, read-only — the claude-watcher derives
       # per-model token usage from them (hooks don't carry token counts)
       - ~/.claude/projects:/claude-projects:ro
+      # Grok Bot must be installed on this host. Opt-in, read-only mount:
+      # the tracker reads only the usage blob; this directory also holds chat transcripts.
+      - "~/Library/Application Support/Grok Bot/sand-client-persistence:/grok-cache:ro"
