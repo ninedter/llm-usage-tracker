@@ -28,7 +28,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} min-h-screen bg-zinc-50 font-sans antialiased dark:bg-zinc-950`}
       >
-        {/* Draggable titlebar region for Electron (traffic light space on macOS) */}
+        {/* Top spacer; a drag region when installed as a desktop web app */}
         <div className="titlebar-drag sticky top-0 z-50 h-8 w-full" />
         <div className="flex flex-1 flex-col" style={{ minHeight: "calc(100vh - 2rem)" }}>
           {children}

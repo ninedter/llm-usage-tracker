@@ -16,9 +16,9 @@ PORT_FILE = os.path.expanduser(
 
 def read_candidate_ports():
     """Yield (port, from_file) pairs. from_file marks the server-port entry:
-    it is the least trustworthy candidate — Electron killed with SIGKILL used
-    to leave it pointing at an orphaned server that accepts TCP but never
-    answers HTTP, so it gets a shorter timeout and stale-file cleanup below."""
+    it is the least trustworthy candidate — a leftover from the retired
+    desktop build, which could leave it pointing at an orphaned server that
+    accepts TCP but never answers HTTP, so it gets a shorter timeout and stale-file cleanup below."""
     ports = []
     try:
         with open(PORT_FILE) as f:

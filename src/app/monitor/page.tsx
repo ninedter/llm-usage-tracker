@@ -9,7 +9,7 @@ export default function MonitorPage() {
   // activity feed scrolls inside the panel instead of growing the document
   return (
     <div className="mx-auto flex h-[calc(100vh-2rem)] w-full flex-col px-4 pb-4">
-      {/* Header — draggable for Electron window movement */}
+      {/* Header */}
       <div className="titlebar-drag mb-4 flex flex-shrink-0 flex-wrap items-center justify-between gap-y-2 pt-2">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Agent Monitor</h1>
