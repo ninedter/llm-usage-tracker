@@ -1,9 +1,10 @@
 import { getCredentials } from "@/lib/credentials";
 import { ClaudeClient, type ClaudeSessionCreds } from "./claude-client";
 import { OpenAIClient } from "./openai-client";
+import { readGrokUsage } from "./grok-client";
 import { CLAUDE_OAUTH_EXPIRED_MESSAGE, UpstreamAuthError } from "./errors";
 import { claudeUsageCache, openaiUsageCache } from "./usage-cache";
-import type { ClaudeUsageData, OpenAIUsageData } from "@/types";
+import type { ClaudeUsageData, GrokUsageData, OpenAIUsageData } from "@/types";
 
 export type UsageErrorCode = "MISSING_CREDENTIALS" | "AUTH_EXPIRED" | "FETCH_ERROR";
 export type UsageResult<T> =
@@ -82,5 +83,16 @@ export async function getOpenAIUsage(
     return { ok: true, data };
   } catch (error) {
     return toFailure(error, "Failed to fetch OpenAI usage");
+  }
+}
+
+export async function getGrokUsage(): Promise<UsageResult<GrokUsageData>> {
+  try {
+    const data = readGrokUsage();
+    return data
+      ? { ok: true, data }
+      : missing("Grok Bot usage cache not found. Open the Grok Bot app while signed in; the tracker reads the usage it saves locally.");
+  } catch (error) {
+    return toFailure(error, "Failed to read Grok Bot usage cache");
   }
 }

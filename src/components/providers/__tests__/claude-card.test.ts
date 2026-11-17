@@ -13,6 +13,21 @@ vi.stubGlobal("React", React);
 afterAll(() => vi.unstubAllGlobals());
 
 describe("Claude usage card", () => {
+  it("renders limit reset tickets between model usage and cloud credits with label tooltip", () => {
+    state.data = parseClaudeUsage({
+      limits: [{ percent: 10, scope: { model: { display_name: "Fable" } } }],
+      cedar_ember: { eligible: true, grants: [{ id: "a", resets_left: 1,
+        clears: ["seven_day_overage_included"], label: " Launch bonus ",
+        ends_at: "2099-12-10T22:00:00Z" }] },
+      iguana_necktie: { limit_dollars: 10, remaining_dollars: 5 },
+    });
+    const html = renderToStaticMarkup(React.createElement(ClaudeCard));
+    expect(html).toMatch(/>1<\/span> limit reset available/);
+    expect(html).toContain("Fable reset");
+    expect(html).toContain('title="Launch bonus"');
+    expect(html.indexOf("Fable reset")).toBeLessThan(html.indexOf("Cloud session credits"));
+  });
+
   it("renders cloud balance, total and expiry separately from prepaid credits", () => {
     state.data = parseClaudeUsage({ iguana_necktie: {
       limit_dollars: 250, remaining_dollars: 93.073258,

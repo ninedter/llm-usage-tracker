@@ -13,7 +13,7 @@ import { CLAUDE_OAUTH_EXPIRED_MESSAGE, UpstreamAuthError } from "./errors";
 
 const execFileAsync = promisify(execFile);
 
-const OAUTH_USER_AGENT = () => process.env.CLAUDE_CODE_USER_AGENT || "claude-code/2.0.32";
+const OAUTH_USER_AGENT = () => process.env.CLAUDE_CODE_USER_AGENT || "claude-cli/2.1.326 (external, cli)";
 const WEB_USER_AGENT = () =>
   process.env.CLAUDE_WEB_USER_AGENT ||
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -173,7 +173,7 @@ export class ClaudeClient {
    * Fetch usage from the OAuth endpoint (covers web + desktop + code).
    */
   static async fetchOAuthUsage(oauthToken: string): Promise<ClaudeUsageResponse> {
-    const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
+    const res = await fetch("https://api.anthropic.com/api/oauth/usage?cedar_ember=1", {
       headers: {
         Authorization: `Bearer ${oauthToken}`,
         "anthropic-beta": "oauth-2025-04-20",
@@ -209,11 +209,17 @@ export class ClaudeClient {
       : Promise.resolve({ prepaid: null, spendLimit: null });
 
     const usage = await this.fetchUsageBody(oauthToken);
-    // OAuth can omit the cloud-session promo bucket. A saved web session can
-    // fill it without replacing OAuth quota data or failing the whole request.
-    if (oauthToken && this.session && usage.iguana_necktie == null) {
-      const webUsage = await this.fetchOptionalJson<ClaudeUsageResponse>(this.session, "usage");
-      if (webUsage?.iguana_necktie) usage.iguana_necktie = webUsage.iguana_necktie;
+    // OAuth can omit either credit bucket. Fill both from one best-effort web
+    // request without replacing the OAuth quota windows.
+    if (oauthToken && this.session &&
+        (usage.iguana_necktie == null || usage.cedar_ember?.eligible !== true)) {
+      const webUsage = await this.fetchOptionalJson<ClaudeUsageResponse>(this.session, "usage?cedar_ember=1");
+      if (usage.iguana_necktie == null && webUsage?.iguana_necktie) {
+        usage.iguana_necktie = webUsage.iguana_necktie;
+      }
+      if (usage.cedar_ember?.eligible !== true && webUsage?.cedar_ember?.eligible === true) {
+        usage.cedar_ember = webUsage.cedar_ember;
+      }
     }
     const extras = await extrasPromise;
     return parseClaudeUsage(usage, extras);
@@ -236,7 +242,7 @@ export class ClaudeClient {
 
   private async fetchSessionUsage(session: ClaudeSessionCreds): Promise<ClaudeUsageResponse> {
     const usageRes = await fetch(
-      `https://claude.ai/api/organizations/${session.organizationId}/usage`,
+      `https://claude.ai/api/organizations/${session.organizationId}/usage?cedar_ember=1`,
       { headers: makeHeaders(session.sessionKey), signal: timeoutSignal() }
     );
 

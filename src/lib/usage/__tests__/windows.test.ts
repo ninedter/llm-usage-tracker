@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   claudeShortestWindow,
+  grokWeeklyWindow,
   openaiShortestWindow,
   compactWindowLabel,
 } from "@/lib/usage/windows";
-import type { ClaudeUsageData, OpenAIUsageData, UsageWindow } from "@/types";
+import type { ClaudeUsageData, GrokUsageData, OpenAIUsageData, UsageWindow } from "@/types";
 
 const win = (percentage: number): UsageWindow => ({
   tokensUsed: 0,
@@ -21,6 +22,8 @@ const claude = (session: number, weekly: number): ClaudeUsageData => ({
   extraUsage: null,
   prepaidBalance: null,
   cloudCredits: null,
+  resetCreditsAvailable: null,
+  resetCredits: [],
   lastUpdated: "",
 });
 
@@ -88,5 +91,16 @@ describe("openaiShortestWindow", () => {
 
   it("returns null when the provider reports no windows", () => {
     expect(openaiShortestWindow(openai([]))).toBeNull();
+  });
+});
+
+describe("grokWeeklyWindow", () => {
+  const grok = (weekly: UsageWindow | null): GrokUsageData => ({
+    planName: "", planLabel: "", weekly, windowReset: weekly === null,
+    isTrial: false, onDemand: null, readAt: "", stale: false, lastUpdated: "",
+  });
+  it("shows only a current 7-day window", () => {
+    expect(grokWeeklyWindow(grok(win(12)))).toMatchObject({ label: "7d", percentage: 12 });
+    expect(grokWeeklyWindow(grok(null))).toBeNull();
   });
 });

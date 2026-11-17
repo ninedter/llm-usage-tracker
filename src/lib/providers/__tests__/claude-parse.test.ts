@@ -1,5 +1,79 @@
 import { describe, it, expect } from "vitest";
-import { parseClaudeUsage, parseCloudCredits, parseExtraUsage, parsePrepaid } from "../claude-parse";
+import { parseClaudeUsage, parseCloudCredits, parseExtraUsage, parsePrepaid, parseResetCredits } from "../claude-parse";
+
+describe("parseResetCredits", () => {
+  const endsSoon = "2099-12-10T22:00:00+00:00";
+  const endsLater = "2099-12-11T22:00:00+00:00";
+  const grant = (id: string, clears: string[], extras: Record<string, unknown> = {}) =>
+    ({ id, resets_left: 1, ends_at: endsSoon, clears, ...extras });
+
+  it("parses and sorts the observed shape, excluding the spent grant", () => {
+    const r = parseClaudeUsage({
+      five_hour: { utilization: 0, resets_at: null },
+      limits: [{ scope: { model: { display_name: "Fable" } } }],
+      cedar_ember: { eligible: true, grants: [
+        grant("fable", ["seven_day_overage_included"], { ends_at: endsLater, label: " New model launch " }),
+        grant("weekly", ["seven_day", "seven_day_overage_included"], { label: " One full limit reset " }),
+        grant("spent", ["seven_day_overage_included"], { resets_left: 0 }),
+      ] },
+    });
+    expect(r.resetCreditsAvailable).toBe(2);
+    expect(r.resetCredits.map((c) => c.title)).toEqual(["Full reset", "Fable reset"]);
+    expect(r.resetCredits[0].detail).toBe("One full limit reset");
+    expect(r.resetCredits[1].detail).toBe("New model launch");
+  });
+
+  it("drops spent, paused, expired and malformed grants without throwing", () => {
+    const r = parseResetCredits({ eligible: true, grants: [
+      grant("spent", ["seven_day"], { resets_left: 0 }),
+      grant("paused", ["seven_day"], { paused: true }),
+      grant("expired", ["seven_day"], { ends_at: "2000-01-01T00:00:00Z" }),
+      { id: "bad", resets_left: "garbage" },
+      null,
+      grant("kept", ["five_hour"], { resets_left: "2", ends_at: "invalid" }),
+    ] });
+    expect(r).toEqual({ resetCreditsAvailable: 2, resetCredits: [
+      { id: "kept", title: "5-hour reset ×2", expiresAt: null },
+    ] });
+  });
+
+  it("counts every remaining reset across three valid grants", () => {
+    const r = parseResetCredits({ eligible: true, grants: [
+      grant("a", ["seven_day"]),
+      grant("b", ["seven_day"]),
+      grant("c", ["seven_day_overage_included"]),
+    ] }, { limits: [{ scope: { model: { display_name: "Fable" } } }] });
+    expect(r.resetCreditsAvailable).toBe(3);
+    expect(r.resetCredits.map((c) => c.title)).toEqual(["Full reset", "Full reset", "Fable reset"]);
+  });
+
+  it("hides absent, malformed and surface-ineligible blocks", () => {
+    for (const raw of [undefined, null, [], "bad", { eligible: false, grants: [] }]) {
+      expect(parseResetCredits(raw)).toEqual({ resetCreditsAvailable: null, resetCredits: [] });
+    }
+    expect(parseResetCredits({ eligible: true, grants: [] }).resetCreditsAvailable).toBe(0);
+  });
+
+  it("uses Weekly reset when a live five-hour window is not cleared", () => {
+    const opts = { fiveHour: { utilization: 5, resets_at: null } };
+    expect(parseResetCredits({ eligible: true, grants: [grant("a", ["seven_day"])] }, opts)
+      .resetCredits[0].title).toBe("Weekly reset");
+    expect(parseResetCredits({ eligible: true, grants: [grant("a", ["seven_day", "five_hour"])] }, opts)
+      .resetCredits[0].title).toBe("Full reset");
+  });
+
+  it("falls back to Model or Limit reset for ambiguous or empty buckets", () => {
+    const opts = { limits: [
+      { scope: { model: { display_name: "Fable" } } },
+      { scope: { model: { display_name: "Opus" } } },
+    ] };
+    const r = parseResetCredits({ eligible: true, grants: [
+      grant("model", ["seven_day_overage_included"]),
+      grant("unknown", []),
+    ] }, opts);
+    expect(r.resetCredits.map((c) => c.title)).toEqual(["Model reset", "Limit reset"]);
+  });
+});
 
 describe("cloud session credits", () => {
   it("reads the observed dollar-denominated bucket without dividing it by 100", () => {

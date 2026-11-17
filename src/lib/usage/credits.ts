@@ -1,5 +1,5 @@
 import { formatCredits, formatMoney } from "@/lib/format";
-import type { ClaudeUsageData, OpenAIUsageData } from "@/types";
+import type { ClaudeUsageData, GrokUsageData, OpenAIUsageData } from "@/types";
 
 export function hasAvailableCloudCredits(d: ClaudeUsageData): boolean {
   const c = d.cloudCredits;
@@ -40,4 +40,12 @@ export function openaiCreditSummary(d: OpenAIUsageData): string | null {
   }
   if (d.creditsDepleted) return "Credits depleted";
   return null;
+}
+
+export function grokCreditSummary(d: GrokUsageData): string | null {
+  const credit = d.onDemand;
+  if (!credit) return null;
+  return credit.limit === null
+    ? `${formatMoney(credit.used, credit.currency)} spent`
+    : `${formatMoney(Math.max(0, credit.limit - credit.used), credit.currency)} left`;
 }

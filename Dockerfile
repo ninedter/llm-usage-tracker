@@ -23,7 +23,8 @@ ENV NODE_ENV=production \
     PORT=3000 \
     LLM_DATA_DIR=/data \
     CODEX_HOME=/codex \
-    CLAUDE_PROJECTS_DIR=/claude-projects
+    CLAUDE_PROJECTS_DIR=/claude-projects \
+    GROK_BOT_CACHE_DIR=/grok-cache
 
 # postbuild already copied .next/static and public into standalone
 COPY --from=builder --chown=node:node /app/.next/standalone ./

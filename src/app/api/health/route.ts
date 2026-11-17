@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   getClaudeUsage,
   getOpenAIUsage,
+  getGrokUsage,
   type UsageResult,
 } from "@/lib/providers/usage-service";
 import type { ApiResponse, ProviderHealth, ProviderHealthEntry } from "@/types";
@@ -21,9 +22,9 @@ export async function GET(): Promise<
 > {
   // Parallel upstream checks sharing the 30s usage cache that the usage
   // routes populate, so a healthy dashboard poll adds no extra round-trips.
-  const [claude, openai] = await Promise.all([getClaudeUsage(), getOpenAIUsage()]);
+  const [claude, openai, grok] = await Promise.all([getClaudeUsage(), getOpenAIUsage(), getGrokUsage()]);
   return NextResponse.json({
     success: true,
-    data: { claude: toEntry(claude), openai: toEntry(openai) },
+    data: { claude: toEntry(claude), openai: toEntry(openai), grok: toEntry(grok) },
   });
 }

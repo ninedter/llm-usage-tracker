@@ -1,4 +1,4 @@
-export type ProviderId = "claude" | "openai";
+export type ProviderId = "claude" | "openai" | "grok";
 
 export type UsageLevel = "safe" | "moderate" | "critical";
 
@@ -63,6 +63,8 @@ export interface ClaudeUsageData {
   extraUsage: ClaudeExtraUsage | null;
   prepaidBalance: MoneyAmount | null;
   cloudCredits: ClaudeCloudCredits | null;
+  resetCreditsAvailable: number | null;
+  resetCredits: ResetCredit[];
   lastUpdated: string;
 }
 
@@ -88,12 +90,15 @@ export interface OpenAIRateWindow {
   level: UsageLevel;
 }
 
-// A granted rate-limit reset credit (spent to clear a hit limit early)
-export interface OpenAIResetCredit {
+// A granted limit reset (spent to clear a hit limit early)
+export interface ResetCredit {
   id: string;
   title: string;
+  detail?: string;
   expiresAt: string | null;
 }
+
+export type OpenAIResetCredit = ResetCredit;
 
 export interface OpenAICredits {
   hasCredits: boolean;
@@ -110,6 +115,18 @@ export interface OpenAIUsageData {
   resetCredits: OpenAIResetCredit[];
   credits: OpenAICredits | null; // null when wham/usage has no credits object
   creditsDepleted: boolean; // rate_limit_reached_type ends with "credits_depleted"
+  lastUpdated: string;
+}
+
+export interface GrokUsageData {
+  planName: string;
+  planLabel: string;
+  weekly: UsageWindow | null;
+  windowReset: boolean;
+  isTrial: boolean;
+  onDemand: { used: number; limit: number | null; currency: string } | null;
+  readAt: string;
+  stale: boolean;
   lastUpdated: string;
 }
 
@@ -134,6 +151,7 @@ export interface ProviderHealthEntry {
 export interface ProviderHealth {
   claude: ProviderHealthEntry;
   openai: ProviderHealthEntry;
+  grok: ProviderHealthEntry;
 }
 
 // --- Agent Monitor ---

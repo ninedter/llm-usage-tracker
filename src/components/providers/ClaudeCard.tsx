@@ -6,6 +6,7 @@ import { ProviderCard } from "@/components/dashboard/ProviderCard";
 import { UsageBar } from "@/components/dashboard/UsageBar";
 import { UsageStat } from "@/components/dashboard/UsageStat";
 import { CreditSection } from "@/components/dashboard/CreditSection";
+import { ResetCredits } from "@/components/dashboard/ResetCredits";
 import { CardSkeleton } from "@/components/ui/Skeleton";
 import { formatMoney } from "@/lib/format";
 import type { ClaudeCloudCredits, ClaudeExtraUsage, MoneyAmount } from "@/types";
@@ -76,6 +77,10 @@ export function ClaudeCard() {
                   )
               )}
             </div>
+          )}
+
+          {data.resetCreditsAvailable != null && (
+            <ResetCredits available={data.resetCreditsAvailable} credits={data.resetCredits} noun="limit reset" />
           )}
 
           {data.cloudCredits && <CloudSessionCredits credit={data.cloudCredits} />}

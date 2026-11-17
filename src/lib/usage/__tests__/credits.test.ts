@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { claudeCreditSummary, hasAvailableCloudCredits, openaiCreditSummary } from "@/lib/usage/credits";
+import { claudeCreditSummary, grokCreditSummary, hasAvailableCloudCredits, openaiCreditSummary } from "@/lib/usage/credits";
 import type {
   ClaudeExtraUsage,
   ClaudeUsageData,
+  GrokUsageData,
   OpenAICredits,
   OpenAIUsageData,
   UsageWindow,
@@ -35,6 +36,8 @@ const claude = (over: Partial<ClaudeUsageData>): ClaudeUsageData => ({
   extraUsage: null,
   prepaidBalance: null,
   cloudCredits: null,
+  resetCreditsAvailable: null,
+  resetCredits: [],
   lastUpdated: "",
   ...over,
 });
@@ -145,5 +148,17 @@ describe("openaiCreditSummary", () => {
 
   it("returns null when there is no credits object", () => {
     expect(openaiCreditSummary(openai(null))).toBeNull();
+  });
+});
+
+describe("grokCreditSummary", () => {
+  const grok = (onDemand: GrokUsageData["onDemand"]): GrokUsageData => ({
+    planName: "", planLabel: "", weekly: null, windowReset: false, isTrial: false,
+    onDemand, readAt: "", stale: false, lastUpdated: "",
+  });
+  it("shows remaining capped spend and uncapped spend", () => {
+    expect(grokCreditSummary(grok({ used: 1.25, limit: 10, currency: "USD" }))).toMatch(/8.75.*left/);
+    expect(grokCreditSummary(grok({ used: 1.25, limit: null, currency: "USD" }))).toMatch(/1.25.*spent/);
+    expect(grokCreditSummary(grok(null))).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import { join } from "path";
 const mocks = vi.hoisted(() => ({
   claudeFetch: vi.fn(),
   openaiFetch: vi.fn(),
+  grokRead: vi.fn(),
   readState: vi.fn(),
   readCodexAuth: vi.fn(),
   claudeCtor: vi.fn(),
@@ -38,9 +39,11 @@ vi.mock("@/lib/providers/openai-client", () => ({
     }
   },
 }));
+vi.mock("@/lib/providers/grok-client", () => ({ readGrokUsage: () => mocks.grokRead() }));
 
 let claudeRoute: typeof import("@/app/api/usage/claude/route");
 let openaiRoute: typeof import("@/app/api/usage/openai/route");
+let grokRoute: typeof import("@/app/api/usage/grok/route");
 let healthRoute: typeof import("@/app/api/health/route");
 let caches: typeof import("@/lib/providers/usage-cache");
 let creds: typeof import("@/lib/credentials");
@@ -50,6 +53,7 @@ beforeAll(async () => {
   process.env.LLM_DATA_DIR = mkdtempSync(join(tmpdir(), "usage-routes-"));
   claudeRoute = await import("@/app/api/usage/claude/route");
   openaiRoute = await import("@/app/api/usage/openai/route");
+  grokRoute = await import("@/app/api/usage/grok/route");
   healthRoute = await import("@/app/api/health/route");
   caches = await import("@/lib/providers/usage-cache");
   creds = await import("@/lib/credentials");
@@ -58,6 +62,7 @@ beforeAll(async () => {
 
 const CLAUDE_DATA = { plan: "max", extraUsage: null };
 const OPENAI_DATA = { plan: "plus", credits: { hasCredits: true, balance: 12.5 } };
+const GROK_DATA = { planName: "Super", weekly: { percentage: 1 }, readAt: "2026-11-01T00:00:00.000Z" };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -67,6 +72,7 @@ beforeEach(() => {
   mocks.readCodexAuth.mockReturnValue({ accessToken: "t", accountId: "a" });
   mocks.claudeFetch.mockResolvedValue(CLAUDE_DATA);
   mocks.openaiFetch.mockResolvedValue(OPENAI_DATA);
+  mocks.grokRead.mockReturnValue(GROK_DATA);
 });
 
 const NO_TOKEN = { token: null, expired: false };
@@ -159,11 +165,30 @@ describe("GET /api/usage/openai", () => {
   });
 });
 
+describe("GET /api/usage/grok", () => {
+  it("returns the saved local reading", async () => {
+    const res = await grokRoute.GET();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, data: GROK_DATA });
+  });
+
+  it("returns the missing-cache setup message", async () => {
+    mocks.grokRead.mockReturnValue(null);
+    const res = await grokRoute.GET();
+    expect(res.status).toBe(401);
+    expect((await res.json()).error).toMatchObject({
+      code: "MISSING_CREDENTIALS",
+      message: expect.stringContaining("Open the Grok Bot app"),
+    });
+  });
+});
+
 describe("GET /api/health", () => {
   it("reports configured + connected when both succeed", async () => {
     const json = await (await healthRoute.GET()).json();
     expect(json.data.claude).toEqual({ configured: true, connected: true });
     expect(json.data.openai).toEqual({ configured: true, connected: true });
+    expect(json.data.grok).toEqual({ configured: true, connected: true });
   });
 
   it("reports AUTH_EXPIRED as configured but disconnected", async () => {
@@ -189,9 +214,11 @@ describe("GET /api/health", () => {
   it("reports unconfigured providers", async () => {
     mocks.readState.mockResolvedValue(NO_TOKEN);
     mocks.readCodexAuth.mockReturnValue(null);
+    mocks.grokRead.mockReturnValue(null);
     const json = await (await healthRoute.GET()).json();
     expect(json.data.claude).toMatchObject({ configured: false, connected: false, code: "MISSING_CREDENTIALS" });
     expect(json.data.openai).toMatchObject({ configured: false, connected: false, code: "MISSING_CREDENTIALS" });
+    expect(json.data.grok).toMatchObject({ configured: false, connected: false, code: "MISSING_CREDENTIALS" });
   });
 
   it("treats saved session creds as configured without an OAuth token", async () => {
